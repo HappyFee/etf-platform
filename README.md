@@ -67,6 +67,22 @@ It contains:
 
 ## Deployment
 
+GitHub Pages production deployment:
+
+```bash
+npm test
+$env:VITE_BASE_PATH="/etf-platform/"
+npm run build
+```
+
+The repository includes `.github/workflows/deploy-pages.yml`. Every push to `master` builds with `VITE_BASE_PATH=/etf-platform/` and deploys `dist` to GitHub Pages. The expected production URL is:
+
+```text
+https://happyfee.github.io/etf-platform/
+```
+
+If the first deployment is blocked by repository settings, open GitHub repository Settings -> Pages and set Source to GitHub Actions.
+
 Vercel:
 
 ```bash

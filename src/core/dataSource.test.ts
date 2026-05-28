@@ -1,8 +1,15 @@
 import { describe, expect, test } from "vitest";
-import { loadGeneratedDataset } from "./dataSource";
+import { generatedDatasetUrl, loadGeneratedDataset } from "./dataSource";
 import { etfProfiles, marketBars } from "./sampleData";
 
 describe("market data source", () => {
+  test("builds generated data URL from the Vite base path", () => {
+    expect(generatedDatasetUrl("/")).toBe("/data/a-share-etf-bars.generated.json");
+    expect(generatedDatasetUrl("/etf-platform/")).toBe(
+      "/etf-platform/data/a-share-etf-bars.generated.json"
+    );
+  });
+
   test("loads generated JSON when it has profiles and bars", async () => {
     const dataset = await loadGeneratedDataset(async () => {
       return {
@@ -14,7 +21,7 @@ describe("market data source", () => {
           bars: marketBars.slice(0, 3)
         })
       } as Response;
-    });
+    }, "/etf-platform/data/a-share-etf-bars.generated.json");
 
     expect(dataset?.source).toBe("unit-test");
     expect(dataset?.profiles).toHaveLength(1);

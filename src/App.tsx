@@ -35,7 +35,7 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
 
-    loadGeneratedDataset().then((generatedDataset) => {
+    loadGeneratedDataset(fetch, `${import.meta.env.BASE_URL}data/a-share-etf-bars.generated.json`).then((generatedDataset) => {
       if (!cancelled && generatedDataset) {
         setDataset(generatedDataset);
       }

@@ -22,6 +22,11 @@ export const sampleDataset: MarketDataset = {
   bars: marketBars
 };
 
+export function generatedDatasetUrl(baseUrl = "/"): string {
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return `${normalizedBase}data/a-share-etf-bars.generated.json`;
+}
+
 function isProfile(value: unknown): value is EtfProfile {
   const item = value as Partial<EtfProfile>;
   return (
@@ -49,10 +54,11 @@ function isMarketBar(value: unknown): value is MarketBar {
 }
 
 export async function loadGeneratedDataset(
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  url = generatedDatasetUrl()
 ): Promise<MarketDataset | null> {
   try {
-    const response = await fetcher("/data/a-share-etf-bars.generated.json", {
+    const response = await fetcher(url, {
       cache: "no-cache"
     });
 
