@@ -3,8 +3,10 @@ import { evaluateUniverse } from "./factors";
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import { groupBarsBySymbol } from "./sampleData";
 import type {
+  BaseStrategyConfig,
   BacktestMetrics,
   BacktestResult,
+  CompositeStrategyConfig,
   EquityPoint,
   EtfProfile,
   EvaluationRow,
@@ -18,6 +20,7 @@ interface RunBacktestInput {
   bars: MarketBar[];
   profiles: EtfProfile[];
   config: StrategyConfig;
+  strategyBook?: StrategyConfig[];
 }
 
 interface DailyPortfolioReturn {
@@ -64,7 +67,15 @@ function dailyPortfolioReturn(
   return { dailyReturn, warnings };
 }
 
-function holdingsFromRows(rows: EvaluationRow[], config: StrategyConfig): Holding[] {
+function isCompositeStrategy(config: StrategyConfig): config is CompositeStrategyConfig {
+  return config.kind === "composite";
+}
+
+function isBaseStrategy(config: StrategyConfig): config is BaseStrategyConfig {
+  return config.kind !== "composite";
+}
+
+function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Holding[] {
   const selected = rows.slice(0, Math.max(0, config.portfolio.topN));
   if (selected.length === 0) {
     return [];
@@ -144,7 +155,7 @@ function calculateMetrics(curve: EquityPoint[], rebalances: RebalanceEvent[]): B
   };
 }
 
-function warmupLength(config: StrategyConfig): number {
+function warmupLength(config: BaseStrategyConfig): number {
   const factorWindows = config.factors
     .map((factor) => factor.params?.window)
     .filter((value): value is number => typeof value === "number");
@@ -159,7 +170,7 @@ function warningsFrom(...collections: string[][]): string[] {
   return [...new Set(collections.flat())];
 }
 
-export function runBacktest(input: RunBacktestInput): BacktestResult {
+function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig }): BacktestResult {
   const barsBySymbol = groupBarsBySymbol(input.bars);
   const dates = uniqueSortedDates(input.bars);
   const startIndex = Math.min(warmupLength(input.config), Math.max(0, dates.length - 2));
@@ -258,4 +269,156 @@ export function runBacktest(input: RunBacktestInput): BacktestResult {
     },
     warnings: warningsFrom(warnings)
   };
+}
+
+function normalizeComponents(config: CompositeStrategyConfig, strategyBook: StrategyConfig[]) {
+  const book = new Map(strategyBook.map((strategy) => [strategy.id, strategy]));
+  const components = config.components
+    .map((component) => ({
+      ...component,
+      strategy: book.get(component.strategyId)
+    }))
+    .filter(
+      (component): component is typeof component & { strategy: StrategyConfig } =>
+        Boolean(component.strategy) && component.weight > 0
+    )
+    .filter((component) => !isCompositeStrategy(component.strategy) || component.strategy.id !== config.id);
+  const totalWeight = components.reduce((total, component) => total + component.weight, 0);
+
+  if (totalWeight <= 0) {
+    return [];
+  }
+
+  return components.map((component) => ({
+    ...component,
+    normalizedWeight: component.weight / totalWeight
+  }));
+}
+
+function aggregateHoldings(
+  childResults: Array<{ weight: number; result: BacktestResult }>
+): Holding[] {
+  const holdings = new Map<string, Holding>();
+
+  for (const child of childResults) {
+    for (const holding of child.result.latestSignal.holdings) {
+      const current = holdings.get(holding.symbol) ?? {
+        symbol: holding.symbol,
+        name: holding.name,
+        weight: 0
+      };
+      holdings.set(holding.symbol, {
+        ...current,
+        weight: current.weight + child.weight * holding.weight
+      });
+    }
+  }
+
+  return [...holdings.values()]
+    .filter((holding) => holding.weight > 0.0001)
+    .sort((left, right) => right.weight - left.weight);
+}
+
+function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrategyConfig }): BacktestResult {
+  const components = normalizeComponents(input.config, input.strategyBook ?? []);
+  const warnings: string[] = [];
+
+  if (components.length === 0) {
+    warnings.push("组合策略至少需要一个有效的子策略和权重。");
+    return {
+      equityCurve: [],
+      rebalances: [],
+      metrics: calculateMetrics([], []),
+      latestSignal: {
+        date: "",
+        holdings: [],
+        rankings: [],
+        nextRebalanceHint: "请先配置子策略"
+      },
+      warnings
+    };
+  }
+
+  const childResults = components.map((component) => {
+    const result = runBacktest({
+      bars: input.bars,
+      profiles: input.profiles,
+      config: component.strategy,
+      strategyBook: input.strategyBook
+    });
+    warnings.push(
+      ...result.warnings.map((warning) => `${component.strategy.name}: ${warning}`)
+    );
+    return { weight: component.normalizedWeight, strategy: component.strategy, result };
+  });
+
+  const commonDates = childResults
+    .map((child) => new Set(child.result.equityCurve.map((point) => point.date)))
+    .reduce<string[]>((dates, dateSet, index) => {
+      if (index === 0) {
+        return [...dateSet];
+      }
+      return dates.filter((date) => dateSet.has(date));
+    }, [])
+    .sort();
+  const childCurveByDate = childResults.map((child) => ({
+    ...child,
+    curveByDate: new Map(child.result.equityCurve.map((point) => [point.date, point]))
+  }));
+  let equity = 1;
+  let peak = 1;
+  const equityCurve: EquityPoint[] = [];
+
+  for (let index = 0; index < commonDates.length; index += 1) {
+    const date = commonDates[index];
+    const dailyReturn =
+      index === 0
+        ? 0
+        : childCurveByDate.reduce(
+            (total, child) =>
+              total + child.weight * (child.curveByDate.get(date)?.dailyReturn ?? 0),
+            0
+          );
+
+    equity *= 1 + dailyReturn;
+    peak = Math.max(peak, equity);
+    equityCurve.push({
+      date,
+      equity,
+      dailyReturn,
+      drawdown: drawdownAt(equity, peak)
+    });
+  }
+
+  const latestHoldings = aggregateHoldings(childResults);
+  const rankings = latestHoldings.map((holding, index) => ({
+    symbol: holding.symbol,
+    name: holding.name,
+    category: "组合持仓",
+    score: holding.weight,
+    passesFilters: true,
+    factorScores: {},
+    filterValues: {}
+  }));
+
+  return {
+    equityCurve,
+    rebalances: [],
+    metrics: calculateMetrics(equityCurve, []),
+    latestSignal: {
+      date: equityCurve.at(-1)?.date ?? "",
+      holdings: latestHoldings,
+      rankings,
+      nextRebalanceHint: "跟随子策略调仓"
+    },
+    warnings: [...new Set(warnings)]
+  };
+}
+
+export function runBacktest(input: RunBacktestInput): BacktestResult {
+  if (isCompositeStrategy(input.config)) {
+    return runCompositeBacktest({ ...input, config: input.config });
+  }
+
+  return runBaseBacktest({ ...input, config: input.config });
 }

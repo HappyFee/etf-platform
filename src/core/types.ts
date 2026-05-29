@@ -36,6 +36,7 @@ export interface EtfProfile {
 export type FactorParams = Record<string, number | string | boolean>;
 
 export interface FactorSelection {
+  key?: string;
   id: string;
   enabled: boolean;
   weight: number;
@@ -63,7 +64,8 @@ export interface RiskConfig {
   cashReturnAnnual: number;
 }
 
-export interface StrategyConfig {
+export interface BaseStrategyConfig {
+  kind: "base";
   id: string;
   name: string;
   description: string;
@@ -75,6 +77,23 @@ export interface StrategyConfig {
   transactionCostBps: number;
   risk: RiskConfig;
 }
+
+export interface StrategyComponent {
+  strategyId: string;
+  weight: number;
+}
+
+export interface CompositeStrategyConfig {
+  kind: "composite";
+  id: string;
+  name: string;
+  description: string;
+  components: StrategyComponent[];
+  transactionCostBps: number;
+  risk: RiskConfig;
+}
+
+export type StrategyConfig = BaseStrategyConfig | CompositeStrategyConfig;
 
 export interface FactorContext {
   bars: MarketBar[];
@@ -89,6 +108,13 @@ export interface FactorDefinition {
   description: string;
   defaultDirection: FactorDirection;
   defaultParams: FactorParams;
+  paramSchema?: Array<{
+    key: string;
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+  }>;
   compute: (context: FactorContext) => number | null;
 }
 

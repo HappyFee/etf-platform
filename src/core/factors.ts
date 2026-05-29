@@ -1,5 +1,7 @@
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import type {
+  BaseStrategyConfig,
+  EtfProfile,
   EvaluationResult,
   EvaluationRow,
   FactorDefinition,
@@ -7,17 +9,30 @@ import type {
   FactorSelection,
   FilterOperator,
   FilterRule,
-  MarketBar,
-  StrategyConfig,
-  EtfProfile
+  MarketBar
 } from "./types";
 
 interface EvaluateUniverseInput {
   barsBySymbol: Map<string, MarketBar[]>;
   profiles: EtfProfile[];
-  config: StrategyConfig;
+  config: BaseStrategyConfig;
   date: string;
 }
+
+interface ActiveFactor {
+  selection: FactorSelection;
+  scoreKey: string;
+}
+
+const windowParamSchema = [
+  {
+    key: "window",
+    label: "窗口",
+    min: 5,
+    max: 252,
+    step: 1
+  }
+];
 
 function numberParam(params: FactorParams, key: string, fallback: number): number {
   const value = params[key];
@@ -79,8 +94,9 @@ function trendSlope(bars: MarketBar[], index: number, window: number): number | 
   if (closes.length < window) {
     return null;
   }
-  const firstHalf = mean(closes.slice(0, Math.floor(window / 2)));
-  const secondHalf = mean(closes.slice(Math.floor(window / 2)));
+  const midpoint = Math.floor(window / 2);
+  const firstHalf = mean(closes.slice(0, midpoint));
+  const secondHalf = mean(closes.slice(midpoint));
   return safeDivide(secondHalf, firstHalf) - 1;
 }
 
@@ -92,121 +108,113 @@ function drawdownFactor(bars: MarketBar[], index: number, window: number): numbe
   return maxDrawdown(closes);
 }
 
+function factorName(base: string, params: FactorParams): string {
+  const window = numberParam(params, "window", 0);
+  return window > 0 ? `${base}(${window})` : base;
+}
+
 export const factorCatalog: FactorDefinition[] = [
   {
-    id: "return_20d",
-    name: "20日动量",
+    id: "return",
+    name: "区间动量",
     category: "momentum",
-    description: "近 20 个交易日涨跌幅，越高代表短期相对强势。",
-    defaultDirection: "desc",
-    defaultParams: { window: 20 },
-    compute: ({ bars, index, params }) =>
-      simpleReturn(bars, index, numberParam(params, "window", 20))
-  },
-  {
-    id: "return_60d",
-    name: "60日动量",
-    category: "momentum",
-    description: "近 60 个交易日涨跌幅，常用于 ETF 轮动主因子。",
+    description: "指定窗口内的涨跌幅。窗口越短越敏感，窗口越长越偏中期趋势。",
     defaultDirection: "desc",
     defaultParams: { window: 60 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       simpleReturn(bars, index, numberParam(params, "window", 60))
   },
   {
-    id: "return_120d",
-    name: "120日动量",
-    category: "momentum",
-    description: "近 120 个交易日涨跌幅，偏中长期趋势。",
-    defaultDirection: "desc",
-    defaultParams: { window: 120 },
-    compute: ({ bars, index, params }) =>
-      simpleReturn(bars, index, numberParam(params, "window", 120))
-  },
-  {
-    id: "close_ma20_ratio",
-    name: "收盘/20日均线",
+    id: "close_ma_ratio",
+    name: "收盘/均线",
     category: "trend",
-    description: "收盘价相对 20 日均线的位置，用于识别趋势强度。",
-    defaultDirection: "desc",
-    defaultParams: { window: 20 },
-    compute: ({ bars, index, params }) =>
-      closeToMovingAverage(bars, index, numberParam(params, "window", 20))
-  },
-  {
-    id: "close_ma60_ratio",
-    name: "收盘/60日均线",
-    category: "trend",
-    description: "收盘价相对 60 日均线的位置，适合中期轮动。",
+    description: "收盘价相对指定窗口均线的位置，用于刻画趋势强度。",
     defaultDirection: "desc",
     defaultParams: { window: 60 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       closeToMovingAverage(bars, index, numberParam(params, "window", 60))
   },
   {
-    id: "volatility_20d",
-    name: "20日波动率",
+    id: "volatility",
+    name: "年化波动率",
     category: "risk",
-    description: "近 20 日年化波动率，普通投资者配置中通常越低越好。",
+    description: "指定窗口内的年化波动率，普通投资者配置中通常越低越好。",
     defaultDirection: "asc",
     defaultParams: { window: 20 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       annualizedVolatility(bars, index, numberParam(params, "window", 20))
   },
   {
-    id: "volatility_60d",
-    name: "60日波动率",
+    id: "max_drawdown",
+    name: "最大回撤",
     category: "risk",
-    description: "近 60 日年化波动率，适合做稳健性约束。",
+    description: "指定窗口内的最大回撤，越低代表路径更平稳。",
     defaultDirection: "asc",
     defaultParams: { window: 60 },
-    compute: ({ bars, index, params }) =>
-      annualizedVolatility(bars, index, numberParam(params, "window", 60))
-  },
-  {
-    id: "max_drawdown_60d",
-    name: "60日最大回撤",
-    category: "risk",
-    description: "近 60 日区间内最大回撤，越低代表路径更平稳。",
-    defaultDirection: "asc",
-    defaultParams: { window: 60 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       drawdownFactor(bars, index, numberParam(params, "window", 60))
   },
   {
-    id: "max_drawdown_120d",
-    name: "120日最大回撤",
-    category: "risk",
-    description: "近 120 日最大回撤，用于中期风险过滤。",
-    defaultDirection: "asc",
-    defaultParams: { window: 120 },
-    compute: ({ bars, index, params }) =>
-      drawdownFactor(bars, index, numberParam(params, "window", 120))
-  },
-  {
-    id: "amount_ma20",
-    name: "20日成交额",
+    id: "amount_ma",
+    name: "平均成交额",
     category: "liquidity",
-    description: "近 20 日平均成交额，用于过滤流动性不足的 ETF。",
+    description: "指定窗口内的平均成交额，用于过滤流动性不足的 ETF。",
     defaultDirection: "desc",
     defaultParams: { window: 20 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       movingAverageAmount(bars, index, numberParam(params, "window", 20))
   },
   {
-    id: "trend_slope_60d",
-    name: "60日趋势斜率",
+    id: "trend_slope",
+    name: "趋势斜率",
     category: "trend",
     description: "比较窗口前后半段均价，刻画趋势抬升速度。",
     defaultDirection: "desc",
     defaultParams: { window: 60 },
+    paramSchema: windowParamSchema,
     compute: ({ bars, index, params }) =>
       trendSlope(bars, index, numberParam(params, "window", 60))
   }
 ];
 
+const legacyFactorAliases: Record<string, { id: string; params: FactorParams }> = {
+  return_20d: { id: "return", params: { window: 20 } },
+  return_60d: { id: "return", params: { window: 60 } },
+  return_120d: { id: "return", params: { window: 120 } },
+  close_ma20_ratio: { id: "close_ma_ratio", params: { window: 20 } },
+  close_ma60_ratio: { id: "close_ma_ratio", params: { window: 60 } },
+  volatility_20d: { id: "volatility", params: { window: 20 } },
+  volatility_60d: { id: "volatility", params: { window: 60 } },
+  max_drawdown_60d: { id: "max_drawdown", params: { window: 60 } },
+  max_drawdown_120d: { id: "max_drawdown", params: { window: 120 } },
+  amount_ma20: { id: "amount_ma", params: { window: 20 } },
+  trend_slope_60d: { id: "trend_slope", params: { window: 60 } }
+};
+
 export function getFactorDefinition(id: string): FactorDefinition | undefined {
-  return factorCatalog.find((factor) => factor.id === id);
+  const canonicalId = legacyFactorAliases[id]?.id ?? id;
+  return factorCatalog.find((factor) => factor.id === canonicalId);
+}
+
+export function getFactorDisplayName(selection: FactorSelection): string {
+  const definition = getFactorDefinition(selection.id);
+  if (!definition) {
+    return selection.id;
+  }
+  return factorName(definition.name, {
+    ...definition.defaultParams,
+    ...(legacyFactorAliases[selection.id]?.params ?? {}),
+    ...(selection.params ?? {})
+  });
+}
+
+export function factorScoreKey(selection: FactorSelection, index: number): string {
+  return selection.key ?? `${selection.id}-${index}`;
 }
 
 export function findBarIndexAtOrBefore(bars: MarketBar[], date: string): number {
@@ -224,6 +232,7 @@ export function computeFactorValue(
   date: string,
   params: FactorParams = {}
 ): number | null {
+  const alias = legacyFactorAliases[factorId];
   const definition = getFactorDefinition(factorId);
   const index = findBarIndexAtOrBefore(bars, date);
 
@@ -234,7 +243,7 @@ export function computeFactorValue(
   return definition.compute({
     bars,
     index,
-    params: { ...definition.defaultParams, ...params }
+    params: { ...definition.defaultParams, ...(alias?.params ?? {}), ...params }
   });
 }
 
@@ -257,7 +266,7 @@ function compareFilter(value: number | null, operator: FilterOperator, target: n
 
 function normalizeFactor(
   rows: EvaluationRow[],
-  selection: FactorSelection,
+  active: ActiveFactor,
   rawValues: Map<string, number | null>
 ): void {
   const finite = rows
@@ -266,7 +275,9 @@ function normalizeFactor(
       Number.isFinite(item.value)
     )
     .sort((left, right) =>
-      selection.direction === "desc" ? right.value - left.value : left.value - right.value
+      active.selection.direction === "desc"
+        ? right.value - left.value
+        : left.value - right.value
     );
 
   const denominator = Math.max(1, finite.length - 1);
@@ -278,11 +289,11 @@ function normalizeFactor(
 
   for (const row of rows) {
     const raw = rawValues.get(row.symbol) ?? null;
-    row.factorScores[selection.id] = {
+    row.factorScores[active.scoreKey] = {
       raw,
       normalized: normalized.get(row.symbol) ?? 0,
-      direction: selection.direction,
-      weight: selection.weight
+      direction: active.selection.direction,
+      weight: active.selection.weight
     };
   }
 }
@@ -297,13 +308,18 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
     (factor) => factor.enabled && factor.weight > 0
   );
 
-  const activeFactors = requestedActiveFactors.filter((factor) => {
-    const exists = Boolean(getFactorDefinition(factor.id));
-    if (!exists) {
-      warnings.push(`未知因子：${factor.id}`);
-    }
-    return exists;
-  });
+  const activeFactors: ActiveFactor[] = requestedActiveFactors
+    .map((selection, index) => ({
+      selection,
+      scoreKey: factorScoreKey(selection, index)
+    }))
+    .filter((active) => {
+      const exists = Boolean(getFactorDefinition(active.selection.id));
+      if (!exists) {
+        warnings.push(`未知因子：${active.selection.id}`);
+      }
+      return exists;
+    });
 
   if (requestedActiveFactors.length === 0 || activeFactors.length === 0) {
     warnings.push("至少需要启用一个权重大于 0 的因子。");
@@ -349,29 +365,29 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
     return { date: input.date, rows, warnings: uniqueWarnings(warnings) };
   }
 
-  for (const selection of activeFactors) {
+  for (const active of activeFactors) {
     const rawValues = new Map<string, number | null>();
     for (const row of rows) {
       const bars = input.barsBySymbol.get(row.symbol)!;
       rawValues.set(
         row.symbol,
-        computeFactorValue(selection.id, bars, input.date, selection.params)
+        computeFactorValue(active.selection.id, bars, input.date, active.selection.params)
       );
     }
-    normalizeFactor(rows, selection, rawValues);
+    normalizeFactor(rows, active, rawValues);
   }
 
   for (const row of rows) {
     let score = 0;
     let weightTotal = 0;
 
-    for (const selection of activeFactors) {
-      const detail = row.factorScores[selection.id];
+    for (const active of activeFactors) {
+      const detail = row.factorScores[active.scoreKey];
       if (!detail) {
         continue;
       }
-      score += detail.normalized * selection.weight;
-      weightTotal += selection.weight;
+      score += detail.normalized * active.selection.weight;
+      weightTotal += active.selection.weight;
     }
 
     row.score = weightTotal > 0 ? score / weightTotal : 0;

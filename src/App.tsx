@@ -5,10 +5,10 @@ import { Dashboard } from "./components/Dashboard";
 import { FactorLibrary } from "./components/FactorLibrary";
 import { SignalPanel } from "./components/SignalPanel";
 import { StrategyLab } from "./components/StrategyLab";
-import { defaultStrategy } from "./core/defaultStrategy";
+import { defaultStrategies, defaultStrategy, defaultCompositeStrategy } from "./core/defaultStrategy";
 import { runBacktest } from "./core/backtest";
 import { loadGeneratedDataset, sampleDataset } from "./core/dataSource";
-import type { StrategyConfig } from "./core/types";
+import type { BaseStrategyConfig, CompositeStrategyConfig, StrategyConfig } from "./core/types";
 
 type TabKey = "overview" | "lab" | "factors" | "signals";
 
@@ -23,13 +23,20 @@ const tabs: Array<{
   { key: "signals", label: "信号跟踪", icon: BellRing }
 ];
 
-function cloneDefaultStrategy(): StrategyConfig {
-  return JSON.parse(JSON.stringify(defaultStrategy)) as StrategyConfig;
+function cloneStrategy<T extends StrategyConfig>(strategy: T): T {
+  return JSON.parse(JSON.stringify(strategy)) as T;
+}
+
+function uniqueId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
-  const [config, setConfig] = useState<StrategyConfig>(cloneDefaultStrategy);
+  const [strategies, setStrategies] = useState<StrategyConfig[]>(
+    defaultStrategies.map(cloneStrategy)
+  );
+  const [activeStrategyId, setActiveStrategyId] = useState(defaultStrategy.id);
   const [dataset, setDataset] = useState(sampleDataset);
 
   useEffect(() => {
@@ -46,10 +53,75 @@ export function App() {
     };
   }, []);
 
-  const result = useMemo(
-    () => runBacktest({ bars: dataset.bars, profiles: dataset.profiles, config }),
-    [config, dataset]
+  const config = useMemo(
+    () => strategies.find((strategy) => strategy.id === activeStrategyId) ?? strategies[0],
+    [activeStrategyId, strategies]
   );
+
+  const result = useMemo(
+    () =>
+      runBacktest({
+        bars: dataset.bars,
+        profiles: dataset.profiles,
+        config,
+        strategyBook: strategies
+      }),
+    [config, dataset, strategies]
+  );
+
+  function updateActiveStrategy(next: StrategyConfig) {
+    setStrategies((current) =>
+      current.map((strategy) => (strategy.id === next.id ? next : strategy))
+    );
+  }
+
+  function createBaseStrategy() {
+    const next: BaseStrategyConfig = {
+      ...cloneStrategy(defaultStrategy),
+      id: uniqueId("base"),
+      name: `新基础策略 ${strategies.length + 1}`,
+      description: "自定义 ETF 池、因子参数和权重。"
+    };
+    setStrategies((current) => [...current, next]);
+    setActiveStrategyId(next.id);
+    setActiveTab("lab");
+  }
+
+  function createCompositeStrategy() {
+    const next: CompositeStrategyConfig = {
+      ...cloneStrategy(defaultCompositeStrategy),
+      id: uniqueId("composite"),
+      name: `新组合策略 ${strategies.length + 1}`,
+      description: "按权重组合多个已有基础策略。",
+      components: strategies
+        .filter((strategy) => strategy.kind === "base")
+        .slice(0, 2)
+        .map((strategy, index) => ({
+          strategyId: strategy.id,
+          weight: index === 0 ? 0.6 : 0.4
+        }))
+    };
+    setStrategies((current) => [...current, next]);
+    setActiveStrategyId(next.id);
+    setActiveTab("lab");
+  }
+
+  function duplicateActiveStrategy() {
+    const next = cloneStrategy(config);
+    next.id = uniqueId(config.kind === "composite" ? "composite" : "base");
+    next.name = `${config.name} 副本`;
+    setStrategies((current) => [...current, next]);
+    setActiveStrategyId(next.id);
+  }
+
+  function deleteActiveStrategy() {
+    if (strategies.length <= 1) {
+      return;
+    }
+    const remaining = strategies.filter((strategy) => strategy.id !== config.id);
+    setStrategies(remaining);
+    setActiveStrategyId(remaining[0].id);
+  }
 
   return (
     <main className="app-shell">
@@ -66,6 +138,7 @@ export function App() {
               {result.latestSignal.date}
             </span>
             <span>{dataset.source}</span>
+            <span>{config.kind === "composite" ? "组合策略" : "基础策略"}</span>
             <strong>{result.latestSignal.holdings.length} 个持仓</strong>
           </div>
         </div>
@@ -99,8 +172,14 @@ export function App() {
             config={config}
             result={result}
             profiles={dataset.profiles}
-            onChange={setConfig}
-            onReset={() => setConfig(cloneDefaultStrategy())}
+            strategies={strategies}
+            activeStrategyId={activeStrategyId}
+            onSelect={setActiveStrategyId}
+            onChange={updateActiveStrategy}
+            onCreateBase={createBaseStrategy}
+            onCreateComposite={createCompositeStrategy}
+            onDuplicate={duplicateActiveStrategy}
+            onDelete={deleteActiveStrategy}
           />
         )}
         {activeTab === "factors" && <FactorLibrary config={config} />}

@@ -13,7 +13,9 @@ const categoryName: Record<string, string> = {
 
 export function FactorLibrary({ config }: { config: StrategyConfig }) {
   const activeIds = new Set(
-    config.factors.filter((factor) => factor.enabled).map((factor) => factor.id)
+    config.kind === "base"
+      ? config.factors.filter((factor) => factor.enabled).map((factor) => factor.id)
+      : []
   );
   const groups = factorCatalog.reduce<Record<string, typeof factorCatalog>>(
     (current, factor) => {
@@ -26,7 +28,7 @@ export function FactorLibrary({ config }: { config: StrategyConfig }) {
   return (
     <Section
       title="因子库"
-      action={<span className="section-note">{factorCatalog.length} 个内置因子</span>}
+      action={<span className="section-note">{factorCatalog.length} 个参数化因子</span>}
     >
       <div className="factor-groups">
         {Object.entries(groups).map(([category, factors]) => (
@@ -44,6 +46,14 @@ export function FactorLibrary({ config }: { config: StrategyConfig }) {
                     <div>
                       <strong>{factor.name}</strong>
                       <p>{factor.description}</p>
+                      {factor.paramSchema && (
+                        <small>
+                          参数：
+                          {factor.paramSchema
+                            .map((param) => `${param.label} ${param.min}-${param.max}`)
+                            .join("，")}
+                        </small>
+                      )}
                     </div>
                     <span title={factor.defaultDirection === "desc" ? "越高越好" : "越低越好"}>
                       <DirectionIcon size={16} />

@@ -372,6 +372,40 @@ td small {
   gap: 14px;
 }
 
+.strategy-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) repeat(4, max-content);
+  align-items: end;
+  gap: 10px;
+}
+
+.strategy-toolbar label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--accent-strong);
+  background: #fff;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.text-action.danger {
+  color: var(--danger);
+}
+
 .control-grid label,
 .factor-toggle {
   display: grid;
@@ -447,6 +481,21 @@ input[type="checkbox"] {
   border-bottom: 1px solid #edf2f4;
 }
 
+.factor-control--parametric {
+  grid-template-columns: minmax(190px, 1.2fr) minmax(180px, 1fr) repeat(2, minmax(110px, 0.6fr));
+  align-items: end;
+  gap: 14px;
+  padding: 10px 0;
+}
+
+.factor-control--parametric > label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .factor-toggle {
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
@@ -456,6 +505,30 @@ input[type="checkbox"] {
 .factor-control b {
   color: var(--accent-strong);
   text-align: right;
+}
+
+.component-list {
+  display: grid;
+  gap: 10px;
+}
+
+.component-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(200px, 0.8fr);
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.component-row > label:last-child {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .factor-groups {
@@ -545,6 +618,12 @@ input[type="checkbox"] {
     grid-template-columns: 1fr;
     gap: 8px;
     padding-bottom: 12px;
+  }
+
+  .strategy-toolbar,
+  .component-row,
+  .factor-control--parametric {
+    grid-template-columns: 1fr;
   }
 
   .factor-control b {

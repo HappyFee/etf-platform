@@ -1,7 +1,9 @@
-import { RotateCcw } from "lucide-react";
-import { factorCatalog } from "../core/factors";
+import { Copy, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { factorCatalog, getFactorDisplayName } from "../core/factors";
 import type {
   BacktestResult,
+  BaseStrategyConfig,
+  CompositeStrategyConfig,
   EtfProfile,
   FactorSelection,
   FilterRule,
@@ -10,31 +12,6 @@ import type {
   WeightingMethod
 } from "../core/types";
 import { formatPercent, Section } from "./ui";
-
-function updateFactor(
-  config: StrategyConfig,
-  id: string,
-  patch: Partial<FactorSelection>
-): StrategyConfig {
-  return {
-    ...config,
-    factors: config.factors.map((factor) =>
-      factor.id === id ? { ...factor, ...patch } : factor
-    )
-  };
-}
-
-function updateLiquidityFilter(config: StrategyConfig, value: number): StrategyConfig {
-  const nextFilter: FilterRule = {
-    factorId: "amount_ma20",
-    operator: ">=",
-    value,
-    params: { window: 20 }
-  };
-
-  const otherFilters = config.filters.filter((filter) => filter.factorId !== "amount_ma20");
-  return { ...config, filters: [nextFilter, ...otherFilters] };
-}
 
 function boundedNumber(
   value: number,
@@ -48,33 +25,168 @@ function boundedNumber(
   return Math.min(max, Math.max(min, value));
 }
 
-export function StrategyLab({
+function updateFactor(
+  config: BaseStrategyConfig,
+  key: string,
+  patch: Partial<FactorSelection>
+): BaseStrategyConfig {
+  return {
+    ...config,
+    factors: config.factors.map((factor) =>
+      factor.key === key ? { ...factor, ...patch } : factor
+    )
+  };
+}
+
+function updateFactorParam(
+  config: BaseStrategyConfig,
+  key: string,
+  paramKey: string,
+  value: number
+): BaseStrategyConfig {
+  return {
+    ...config,
+    factors: config.factors.map((factor) =>
+      factor.key === key
+        ? {
+            ...factor,
+            params: {
+              ...(factor.params ?? {}),
+              [paramKey]: value
+            }
+          }
+        : factor
+    )
+  };
+}
+
+function updateLiquidityFilter(config: BaseStrategyConfig, value: number): BaseStrategyConfig {
+  const nextFilter: FilterRule = {
+    factorId: "amount_ma",
+    operator: ">=",
+    value,
+    params: { window: 20 }
+  };
+
+  const otherFilters = config.filters.filter((filter) => filter.factorId !== "amount_ma");
+  return { ...config, filters: [nextFilter, ...otherFilters] };
+}
+
+function baseStrategies(strategies: StrategyConfig[]): BaseStrategyConfig[] {
+  return strategies.filter((strategy): strategy is BaseStrategyConfig => strategy.kind === "base");
+}
+
+function upsertComponent(
+  config: CompositeStrategyConfig,
+  strategyId: string,
+  checked: boolean
+): CompositeStrategyConfig {
+  if (!checked) {
+    return {
+      ...config,
+      components: config.components.filter((component) => component.strategyId !== strategyId)
+    };
+  }
+
+  if (config.components.some((component) => component.strategyId === strategyId)) {
+    return config;
+  }
+
+  return {
+    ...config,
+    components: [...config.components, { strategyId, weight: 0.5 }]
+  };
+}
+
+function updateComponentWeight(
+  config: CompositeStrategyConfig,
+  strategyId: string,
+  weight: number
+): CompositeStrategyConfig {
+  return {
+    ...config,
+    components: config.components.map((component) =>
+      component.strategyId === strategyId ? { ...component, weight } : component
+    )
+  };
+}
+
+function StrategyToolbar({
+  strategies,
+  activeStrategyId,
+  onSelect,
+  onCreateBase,
+  onCreateComposite,
+  onDuplicate,
+  onDelete
+}: {
+  strategies: StrategyConfig[];
+  activeStrategyId: string;
+  onSelect: (id: string) => void;
+  onCreateBase: () => void;
+  onCreateComposite: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Section title="策略工作区" action={<span className="section-note">{strategies.length} 个策略</span>}>
+      <div className="strategy-toolbar">
+        <label>
+          当前策略
+          <select value={activeStrategyId} onChange={(event) => onSelect(event.target.value)}>
+            {strategies.map((strategy) => (
+              <option key={strategy.id} value={strategy.id}>
+                {strategy.name} · {strategy.kind === "composite" ? "组合" : "基础"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="text-action" onClick={onCreateBase} type="button">
+          <Plus size={16} />
+          新基础策略
+        </button>
+        <button className="text-action" onClick={onCreateComposite} type="button">
+          <Plus size={16} />
+          新组合策略
+        </button>
+        <button className="text-action" onClick={onDuplicate} type="button">
+          <Copy size={16} />
+          复制
+        </button>
+        <button className="text-action danger" onClick={onDelete} type="button">
+          <Trash2 size={16} />
+          删除
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+function BaseStrategyEditor({
   config,
   result,
   profiles,
-  onChange,
-  onReset
+  onChange
 }: {
-  config: StrategyConfig;
+  config: BaseStrategyConfig;
   result: BacktestResult;
   profiles: EtfProfile[];
   onChange: (config: StrategyConfig) => void;
-  onReset: () => void;
 }) {
   const factorById = new Map(factorCatalog.map((factor) => [factor.id, factor]));
-  const liquidityFilter = config.filters.find((filter) => filter.factorId === "amount_ma20");
+  const liquidityFilter = config.filters.find((filter) => filter.factorId === "amount_ma");
 
   return (
-    <div className="lab-grid">
-      <Section
-        title="组合规则"
-        action={
-          <button className="icon-action" onClick={onReset} title="恢复默认策略" type="button">
-            <RotateCcw size={17} />
-          </button>
-        }
-      >
+    <>
+      <Section title="组合规则">
         <div className="control-grid">
+          <label>
+            策略名称
+            <input
+              value={config.name}
+              onChange={(event) => onChange({ ...config, name: event.target.value })}
+            />
+          </label>
           <label>
             调仓频率
             <select
@@ -210,52 +322,249 @@ export function StrategyLab({
       </Section>
 
       <Section
-        title="因子权重"
+        title="因子权重与参数"
         action={<span className="section-note">累计收益 {formatPercent(result.metrics.totalReturn)}</span>}
       >
-        <div className="factor-controls">
+        <div className="factor-controls factor-controls--parametric">
           {config.factors.map((factor) => {
             const definition = factorById.get(factor.id);
+            const factorKey = factor.key ?? factor.id;
             return (
-              <div className="factor-control" key={factor.id}>
+              <div className="factor-control factor-control--parametric" key={factorKey}>
                 <label className="factor-toggle">
                   <input
                     checked={factor.enabled}
                     onChange={(event) =>
-                      onChange(updateFactor(config, factor.id, { enabled: event.target.checked }))
+                      onChange(updateFactor(config, factorKey, { enabled: event.target.checked }))
                     }
                     type="checkbox"
                   />
                   <span>
-                    <strong>{definition?.name ?? factor.id}</strong>
+                    <strong>{getFactorDisplayName(factor)}</strong>
                     <small>{factor.direction === "desc" ? "高优先" : "低优先"}</small>
                   </span>
                 </label>
-                <input
-                  max={1}
-                  min={0}
-                  step={0.01}
-                  type="range"
-                  value={factor.weight}
-                  onChange={(event) =>
-                    onChange(
-                      updateFactor(config, factor.id, {
-                        weight: boundedNumber(
-                          Number(event.target.value),
-                          factor.weight,
-                          0,
-                          1
-                        )
-                      })
-                    )
-                  }
-                />
-                <b>{(factor.weight * 100).toFixed(0)}%</b>
+                <label>
+                  权重
+                  <input
+                    max={1}
+                    min={0}
+                    step={0.01}
+                    type="range"
+                    value={factor.weight}
+                    onChange={(event) =>
+                      onChange(
+                        updateFactor(config, factorKey, {
+                          weight: boundedNumber(
+                            Number(event.target.value),
+                            factor.weight,
+                            0,
+                            1
+                          )
+                        })
+                      )
+                    }
+                  />
+                  <small>{(factor.weight * 100).toFixed(0)}%</small>
+                </label>
+                {definition?.paramSchema?.map((param) => {
+                  const currentValue =
+                    typeof factor.params?.[param.key] === "number"
+                      ? (factor.params[param.key] as number)
+                      : Number(definition.defaultParams[param.key]);
+                  return (
+                    <label key={param.key}>
+                      {param.label}
+                      <input
+                        max={param.max}
+                        min={param.min}
+                        step={param.step}
+                        type="number"
+                        value={currentValue}
+                        onChange={(event) =>
+                          onChange(
+                            updateFactorParam(
+                              config,
+                              factorKey,
+                              param.key,
+                              boundedNumber(
+                                Number(event.target.value),
+                                currentValue,
+                                param.min,
+                                param.max
+                              )
+                            )
+                          )
+                        }
+                      />
+                    </label>
+                  );
+                })}
               </div>
             );
           })}
         </div>
       </Section>
+    </>
+  );
+}
+
+function CompositeStrategyEditor({
+  config,
+  strategies,
+  result,
+  onChange
+}: {
+  config: CompositeStrategyConfig;
+  strategies: StrategyConfig[];
+  result: BacktestResult;
+  onChange: (config: StrategyConfig) => void;
+}) {
+  const bases = baseStrategies(strategies);
+
+  return (
+    <>
+      <Section
+        title="组合策略"
+        action={<span className="section-note">累计收益 {formatPercent(result.metrics.totalReturn)}</span>}
+      >
+        <div className="control-grid">
+          <label>
+            策略名称
+            <input
+              value={config.name}
+              onChange={(event) => onChange({ ...config, name: event.target.value })}
+            />
+          </label>
+          <label>
+            交易成本 bps
+            <input
+              max={50}
+              min={0}
+              type="number"
+              value={config.transactionCostBps}
+              onChange={(event) =>
+                onChange({
+                  ...config,
+                  transactionCostBps: boundedNumber(
+                    Number(event.target.value),
+                    config.transactionCostBps,
+                    0,
+                    50
+                  )
+                })
+              }
+            />
+          </label>
+        </div>
+      </Section>
+
+      <Section
+        title="子策略权重"
+        action={<span className="section-note">{config.components.length} 个已组合</span>}
+      >
+        <div className="component-list">
+          {bases.map((strategy) => {
+            const component = config.components.find(
+              (item) => item.strategyId === strategy.id
+            );
+            return (
+              <div className="component-row" key={strategy.id}>
+                <label className="factor-toggle">
+                  <input
+                    checked={Boolean(component)}
+                    onChange={(event) =>
+                      onChange(upsertComponent(config, strategy.id, event.target.checked))
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>{strategy.name}</strong>
+                    <small>{strategy.description}</small>
+                  </span>
+                </label>
+                <label>
+                  权重
+                  <input
+                    disabled={!component}
+                    max={1}
+                    min={0}
+                    step={0.01}
+                    type="range"
+                    value={component?.weight ?? 0}
+                    onChange={(event) =>
+                      onChange(
+                        updateComponentWeight(
+                          config,
+                          strategy.id,
+                          boundedNumber(Number(event.target.value), component?.weight ?? 0, 0, 1)
+                        )
+                      )
+                    }
+                  />
+                  <small>{((component?.weight ?? 0) * 100).toFixed(0)}%</small>
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+export function StrategyLab({
+  config,
+  result,
+  profiles,
+  strategies,
+  activeStrategyId,
+  onSelect,
+  onChange,
+  onCreateBase,
+  onCreateComposite,
+  onDuplicate,
+  onDelete
+}: {
+  config: StrategyConfig;
+  result: BacktestResult;
+  profiles: EtfProfile[];
+  strategies: StrategyConfig[];
+  activeStrategyId: string;
+  onSelect: (id: string) => void;
+  onChange: (config: StrategyConfig) => void;
+  onCreateBase: () => void;
+  onCreateComposite: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="lab-grid">
+      <StrategyToolbar
+        activeStrategyId={activeStrategyId}
+        onCreateBase={onCreateBase}
+        onCreateComposite={onCreateComposite}
+        onDelete={onDelete}
+        onDuplicate={onDuplicate}
+        onSelect={onSelect}
+        strategies={strategies}
+      />
+
+      {config.kind === "composite" ? (
+        <CompositeStrategyEditor
+          config={config}
+          onChange={onChange}
+          result={result}
+          strategies={strategies}
+        />
+      ) : (
+        <BaseStrategyEditor
+          config={config}
+          onChange={onChange}
+          profiles={profiles}
+          result={result}
+        />
+      )}
     </div>
   );
 }

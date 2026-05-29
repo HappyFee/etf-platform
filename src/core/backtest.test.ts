@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { runBacktest } from "./backtest";
-import { defaultStrategy } from "./defaultStrategy";
+import { defaultCompositeStrategy, defaultStrategy, defensiveStrategy } from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
 
 describe("backtest engine", () => {
@@ -134,5 +134,34 @@ describe("backtest engine", () => {
     });
 
     expect(result.warnings.some((warning) => warning.includes("缺少行情"))).toBe(true);
+  });
+
+  test("combines multiple base strategies into a composite strategy", () => {
+    const baseResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: defaultStrategy
+    });
+    const defensiveResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: defensiveStrategy
+    });
+    const compositeResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: defaultCompositeStrategy,
+      strategyBook: [defaultStrategy, defensiveStrategy, defaultCompositeStrategy]
+    });
+
+    expect(compositeResult.equityCurve.length).toBeGreaterThan(250);
+    expect(compositeResult.latestSignal.date).toBe(marketBars.at(-1)!.date);
+    expect(compositeResult.latestSignal.holdings.length).toBeGreaterThan(0);
+    expect(compositeResult.metrics.totalReturn).toBeGreaterThan(
+      Math.min(baseResult.metrics.totalReturn, defensiveResult.metrics.totalReturn) - 0.1
+    );
+    expect(compositeResult.metrics.totalReturn).toBeLessThan(
+      Math.max(baseResult.metrics.totalReturn, defensiveResult.metrics.totalReturn) + 0.1
+    );
   });
 });

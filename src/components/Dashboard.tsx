@@ -3,6 +3,13 @@ import type { BacktestResult, StrategyConfig } from "../core/types";
 import { formatNumber, formatPercent, MetricTile, Section } from "./ui";
 import { SignalPanel } from "./SignalPanel";
 
+function strategySummary(config: StrategyConfig, rebalanceCount: number): string {
+  if (config.kind === "composite") {
+    return `组合策略 · ${config.components.length} 个子策略`;
+  }
+  return `${config.rebalance.frequency} · Top ${config.portfolio.topN} · ${rebalanceCount} 次调仓`;
+}
+
 export function Dashboard({
   result,
   config,
@@ -45,8 +52,7 @@ export function Dashboard({
         title="回测报告"
         action={
           <span className="section-note">
-            {config.rebalance.frequency} · Top {config.portfolio.topN} ·{" "}
-            {metrics.rebalanceCount} 次调仓
+            {strategySummary(config, metrics.rebalanceCount)}
           </span>
         }
       >

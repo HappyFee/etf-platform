@@ -53,9 +53,9 @@ The included GitHub Actions workflow can refresh that generated JSON on trading 
 
 ## Strategy DSL
 
-The default strategy is defined in `src/core/defaultStrategy.ts`.
+Default strategies are defined in `src/core/defaultStrategy.ts`. The app now supports both base strategies and composite strategies.
 
-It contains:
+A base strategy contains:
 
 - `universe`: selected ETF symbols
 - `factors`: enabled factor ids, weights, direction, and params
@@ -64,6 +64,14 @@ It contains:
 - `portfolio`: Top N and weighting method
 - `transactionCostBps`: cost applied on turnover
 - `risk`: cash return assumption when no ETF passes filters
+
+A composite strategy contains:
+
+- `components`: existing strategy ids and target weights
+- `transactionCostBps`: optional wrapper-level cost assumption
+- `risk`: cash return assumption
+
+Factors are parameterized. For example, the same `volatility` factor can be used with `window: 20`, `window: 50`, or any supported window without adding a new hard-coded factor id.
 
 ## Deployment
 
