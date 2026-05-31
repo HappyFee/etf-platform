@@ -4,6 +4,10 @@ import type { EtfProfile, MarketBar } from "./types";
 export interface MarketDataset {
   source: string;
   generatedAt: string;
+  latestDate?: string;
+  requestedSymbols?: string[];
+  succeededSymbols?: string[];
+  failedSymbols?: Record<string, string>;
   profiles: EtfProfile[];
   bars: MarketBar[];
 }
@@ -11,6 +15,10 @@ export interface MarketDataset {
 interface GeneratedPayload {
   source?: unknown;
   generatedAt?: unknown;
+  latestDate?: unknown;
+  requestedSymbols?: unknown;
+  succeededSymbols?: unknown;
+  failedSymbols?: unknown;
   profiles?: unknown;
   bars?: unknown;
 }
@@ -18,6 +26,10 @@ interface GeneratedPayload {
 export const sampleDataset: MarketDataset = {
   source: "demo.generated",
   generatedAt: "2026-05-22T00:00:00Z",
+  latestDate: "2026-05-22",
+  requestedSymbols: etfProfiles.map((profile) => profile.symbol),
+  succeededSymbols: etfProfiles.map((profile) => profile.symbol),
+  failedSymbols: {},
   profiles: etfProfiles,
   bars: marketBars
 };
@@ -53,6 +65,27 @@ function isMarketBar(value: unknown): value is MarketBar {
   );
 }
 
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === "string" && typeof entry[1] === "string"
+    )
+  );
+}
+
 export async function loadGeneratedDataset(
   fetcher: typeof fetch = fetch,
   url = generatedDatasetUrl()
@@ -82,6 +115,10 @@ export async function loadGeneratedDataset(
       source: typeof payload.source === "string" ? payload.source : "generated",
       generatedAt:
         typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
+      latestDate: typeof payload.latestDate === "string" ? payload.latestDate : undefined,
+      requestedSymbols: stringArray(payload.requestedSymbols),
+      succeededSymbols: stringArray(payload.succeededSymbols),
+      failedSymbols: stringRecord(payload.failedSymbols),
       profiles,
       bars
     };

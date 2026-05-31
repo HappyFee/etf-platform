@@ -17,6 +17,10 @@ describe("market data source", () => {
         json: async () => ({
           source: "unit-test",
           generatedAt: "2026-05-28T00:00:00Z",
+          latestDate: "2026-05-29",
+          requestedSymbols: ["510300", "159915"],
+          succeededSymbols: ["510300"],
+          failedSymbols: { "159915": "provider timeout" },
           profiles: etfProfiles.slice(0, 1),
           bars: marketBars.slice(0, 3)
         })
@@ -24,6 +28,9 @@ describe("market data source", () => {
     }, "/etf-platform/data/a-share-etf-bars.generated.json");
 
     expect(dataset?.source).toBe("unit-test");
+    expect(dataset?.latestDate).toBe("2026-05-29");
+    expect(dataset?.succeededSymbols).toEqual(["510300"]);
+    expect(dataset?.failedSymbols).toEqual({ "159915": "provider timeout" });
     expect(dataset?.profiles).toHaveLength(1);
     expect(dataset?.bars).toHaveLength(3);
   });

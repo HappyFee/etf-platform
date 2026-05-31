@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -77,12 +79,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", default="20210101")
     parser.add_argument("--end", default=date.today().strftime("%Y%m%d"))
     parser.add_argument("--adjust", default="qfq", choices=["", "qfq", "hfq"])
+    parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--retry-sleep", type=float, default=2)
+    parser.add_argument("--min-success-ratio", type=float, default=0.8)
     parser.add_argument(
         "--output",
         default="public/data/a-share-etf-bars.generated.json",
         help="Path to normalized output JSON.",
     )
     return parser.parse_args()
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
 
 
 def build_profiles(symbols: Iterable[str]) -> list[EtfProfile]:
@@ -148,27 +157,85 @@ def fetch_symbol(symbol: str, start: str, end: str, adjust: str) -> list[MarketB
     return sorted(bars, key=lambda item: item.date)
 
 
+def fetch_symbol_with_retry(
+    symbol: str,
+    start: str,
+    end: str,
+    adjust: str,
+    retries: int,
+    retry_sleep: float,
+) -> list[MarketBar]:
+    attempts = max(1, retries + 1)
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            bars = fetch_symbol(symbol, start, end, adjust)
+            if not bars:
+                raise ValueError(f"{symbol} returned no bars")
+            log(f"{symbol}: fetched {len(bars)} bars through {bars[-1].date}")
+            return bars
+        except Exception as exc:  # noqa: BLE001 - CLI should report all provider failures.
+            last_error = exc
+            log(f"{symbol}: attempt {attempt}/{attempts} failed: {exc}")
+            if attempt < attempts:
+                time.sleep(retry_sleep)
+
+    raise ValueError(f"{symbol} failed after {attempts} attempts: {last_error}")
+
+
 def main() -> None:
     args = parse_args()
     bars: list[MarketBar] = []
+    succeeded_symbols: list[str] = []
+    failed_symbols: dict[str, str] = {}
 
     for symbol in args.symbols:
-        symbol_bars = fetch_symbol(symbol, args.start, args.end, args.adjust)
-        if not symbol_bars:
-            raise ValueError(f"{symbol} returned no bars")
-        bars.extend(symbol_bars)
+        try:
+            symbol_bars = fetch_symbol_with_retry(
+                symbol,
+                args.start,
+                args.end,
+                args.adjust,
+                args.retries,
+                args.retry_sleep,
+            )
+            bars.extend(symbol_bars)
+            succeeded_symbols.append(symbol)
+        except Exception as exc:  # noqa: BLE001 - keep one bad ETF from blocking all data.
+            failed_symbols[symbol] = str(exc)
+
+    success_ratio = len(succeeded_symbols) / max(1, len(args.symbols))
+    if not bars or success_ratio < args.min_success_ratio:
+        raise SystemExit(
+            "ETF data refresh failed: "
+            f"{len(succeeded_symbols)}/{len(args.symbols)} symbols succeeded; "
+            f"failed={failed_symbols}"
+        )
+
+    latest_date = max(bar.date for bar in bars)
+    earliest_date = min(bar.date for bar in bars)
 
     payload = {
         "source": "akshare.fund_etf_hist_em",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "profiles": [asdict(profile) for profile in build_profiles(args.symbols)],
+        "startDate": earliest_date,
+        "endDate": latest_date,
+        "latestDate": latest_date,
+        "requestedSymbols": list(args.symbols),
+        "succeededSymbols": succeeded_symbols,
+        "failedSymbols": failed_symbols,
+        "profiles": [asdict(profile) for profile in build_profiles(succeeded_symbols)],
         "bars": [asdict(bar) for bar in bars],
     }
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"wrote {len(bars)} bars to {output}")
+    print(
+        f"wrote {len(bars)} bars for {len(succeeded_symbols)}/{len(args.symbols)} "
+        f"symbols through {latest_date} to {output}"
+    )
 
 
 if __name__ == "__main__":

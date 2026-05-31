@@ -68,6 +68,12 @@ export function App() {
       }),
     [config, dataset, strategies]
   );
+  const dataLatestDate = dataset.latestDate ?? result.latestSignal.date;
+  const isDemoDataset = dataset.source.startsWith("demo");
+  const symbolCoverage =
+    dataset.requestedSymbols?.length && dataset.succeededSymbols?.length
+      ? `${dataset.succeededSymbols.length}/${dataset.requestedSymbols.length}`
+      : `${dataset.profiles.length}`;
 
   function updateActiveStrategy(next: StrategyConfig) {
     setStrategies((current) =>
@@ -137,7 +143,9 @@ export function App() {
               <Activity size={16} />
               {result.latestSignal.date}
             </span>
-            <span>{dataset.source}</span>
+            <span>数据截至 {dataLatestDate}</span>
+            <span>{isDemoDataset ? "演示数据" : dataset.source}</span>
+            <span>ETF {symbolCoverage}</span>
             <span>{config.kind === "composite" ? "组合策略" : "基础策略"}</span>
             <strong>{result.latestSignal.holdings.length} 个持仓</strong>
           </div>

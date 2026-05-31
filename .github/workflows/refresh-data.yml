@@ -24,6 +24,28 @@ jobs:
       - name: Fetch ETF bars
         run: python scripts/fetch-akshare-etf.py
 
+      - name: Summarize generated data
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("public/data/a-share-etf-bars.generated.json").read_text(encoding="utf-8"))
+          summary = (
+              f"latestDate={payload.get('latestDate')} "
+              f"symbols={len(payload.get('succeededSymbols', []))}/{len(payload.get('requestedSymbols', []))} "
+              f"bars={len(payload.get('bars', []))}"
+          )
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("## ETF data refresh\n\n")
+              output.write(f"- {summary}\n")
+              failed = payload.get("failedSymbols") or {}
+              if failed:
+                  output.write(f"- failedSymbols: `{failed}`\n")
+          PY
+
       - name: Commit generated data
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
