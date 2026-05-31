@@ -60,8 +60,8 @@ A base strategy contains:
 - `universe`: selected ETF symbols
 - `factors`: enabled factor ids, weights, direction, and params
 - `filters`: pre-ranking filters such as 20-day average amount
-- `rebalance`: daily, weekly, or monthly schedule
-- `portfolio`: Top N and weighting method
+- `rebalance`: daily, weekly, or monthly schedule. Weekly strategies can set `weeklyDay` from Monday to Friday; monthly strategies can set `monthlyDay` from 1 to 31. Backtests adjust missing/non-trading target days to the next trading day in the same period, or the period's last trading day if there is no later trading day.
+- `portfolio`: Top N and weighting method. `equal` uses equal weights, `score` weights by normalized factor score, and `fixed` applies rank-based `fixedWeights` such as `[0.5, 0.3, 0.2]`.
 - `transactionCostBps`: cost applied on turnover
 - `risk`: cash return assumption when no ETF passes filters
 

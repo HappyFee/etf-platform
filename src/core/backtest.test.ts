@@ -116,6 +116,27 @@ describe("backtest engine", () => {
     expect(curvePoint.dailyReturn).toBeLessThan(0);
   });
 
+  test("allocates fixed rank weights to selected ETFs", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        portfolio: {
+          topN: 3,
+          weighting: "fixed",
+          fixedWeights: [0.5, 0.3, 0.2]
+        }
+      }
+    });
+
+    expect(result.latestSignal.holdings.map((holding) => holding.weight)).toEqual([
+      0.5,
+      0.3,
+      0.2
+    ]);
+  });
+
   test("warns and accrues cash return when a held ETF is missing a daily bar", () => {
     const baseline = runBacktest({
       bars: marketBars,

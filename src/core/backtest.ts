@@ -1,4 +1,4 @@
-import { shouldRebalance } from "./date";
+import { nextRebalanceHint, shouldRebalance } from "./date";
 import { evaluateUniverse } from "./factors";
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import { groupBarsBySymbol } from "./sampleData";
@@ -79,6 +79,20 @@ function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Ho
   const selected = rows.slice(0, Math.max(0, config.portfolio.topN));
   if (selected.length === 0) {
     return [];
+  }
+
+  if (config.portfolio.weighting === "fixed") {
+    const configuredWeights = config.portfolio.fixedWeights ?? [];
+    const rawWeights = selected.map((_, index) => Math.max(0, configuredWeights[index] ?? 0));
+    const totalWeight = rawWeights.reduce((total, weight) => total + weight, 0);
+
+    if (totalWeight > 0) {
+      return selected.map((row, index) => ({
+        symbol: row.symbol,
+        name: row.name,
+        weight: rawWeights[index] / totalWeight
+      }));
+    }
   }
 
   if (config.portfolio.weighting === "score") {
@@ -206,7 +220,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       });
     }
 
-    if (shouldRebalance(dates, index, input.config.rebalance.frequency, holdings.length > 0)) {
+    if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
       const evaluation = evaluateUniverse({
         barsBySymbol,
         profiles: input.profiles,
@@ -260,12 +274,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       date: latestDate,
       holdings: latestHoldings,
       rankings: latestEvaluation.rows,
-      nextRebalanceHint:
-        input.config.rebalance.frequency === "weekly"
-          ? "下一个交易周首日"
-          : input.config.rebalance.frequency === "monthly"
-            ? "下一个交易月首日"
-            : "下一个交易日"
+      nextRebalanceHint: nextRebalanceHint(input.config.rebalance)
     },
     warnings: warningsFrom(warnings)
   };

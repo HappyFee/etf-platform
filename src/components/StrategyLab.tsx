@@ -1,4 +1,5 @@
-import { Copy, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Copy, Plus, Search, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { factorCatalog, getFactorDisplayName } from "../core/factors";
 import type {
   BacktestResult,
@@ -70,6 +71,37 @@ function updateLiquidityFilter(config: BaseStrategyConfig, value: number): BaseS
 
   const otherFilters = config.filters.filter((filter) => filter.factorId !== "amount_ma");
   return { ...config, filters: [nextFilter, ...otherFilters] };
+}
+
+function normalizeFixedWeights(weights: number[], count: number): number[] {
+  const next = Array.from({ length: count }, (_, index) => weights[index] ?? 0);
+  const total = next.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+
+  if (total <= 0) {
+    return next.map(() => Number((1 / Math.max(1, count)).toFixed(4)));
+  }
+
+  return next.map((weight) => Number((Math.max(0, weight) / total).toFixed(4)));
+}
+
+function updateFixedWeight(
+  config: BaseStrategyConfig,
+  rankIndex: number,
+  weight: number
+): BaseStrategyConfig {
+  const fixedWeights = Array.from(
+    { length: config.portfolio.topN },
+    (_, index) => config.portfolio.fixedWeights?.[index] ?? 0
+  );
+  fixedWeights[rankIndex] = weight;
+
+  return {
+    ...config,
+    portfolio: {
+      ...config.portfolio,
+      fixedWeights: normalizeFixedWeights(fixedWeights, config.portfolio.topN)
+    }
+  };
 }
 
 function baseStrategies(strategies: StrategyConfig[]): BaseStrategyConfig[] {
@@ -175,6 +207,26 @@ function BaseStrategyEditor({
 }) {
   const factorById = new Map(factorCatalog.map((factor) => [factor.id, factor]));
   const liquidityFilter = config.filters.find((filter) => filter.factorId === "amount_ma");
+  const [etfQuery, setEtfQuery] = useState("");
+  const fixedWeights = normalizeFixedWeights(
+    config.portfolio.fixedWeights ?? [],
+    config.portfolio.topN
+  );
+  const etfMatches = useMemo(() => {
+    const query = etfQuery.trim().toLowerCase();
+
+    if (!query) {
+      return profiles;
+    }
+
+    return profiles.filter(
+      (profile) =>
+        profile.symbol.toLowerCase().includes(query) ||
+        profile.name.toLowerCase().includes(query) ||
+        profile.category.toLowerCase().includes(query) ||
+        profile.trackingIndex.toLowerCase().includes(query)
+    );
+  }, [etfQuery, profiles]);
 
   return (
     <>
@@ -195,6 +247,7 @@ function BaseStrategyEditor({
                 onChange({
                   ...config,
                   rebalance: {
+                    ...config.rebalance,
                     frequency: event.target.value as RebalanceFrequency
                   }
                 })
@@ -205,6 +258,53 @@ function BaseStrategyEditor({
               <option value="monthly">每月</option>
             </select>
           </label>
+          {config.rebalance.frequency === "weekly" && (
+            <label>
+              调仓周几
+              <select
+                value={config.rebalance.weeklyDay ?? 1}
+                onChange={(event) =>
+                  onChange({
+                    ...config,
+                    rebalance: {
+                      ...config.rebalance,
+                      weeklyDay: Math.round(
+                        boundedNumber(Number(event.target.value), config.rebalance.weeklyDay ?? 1, 1, 5)
+                      )
+                    }
+                  })
+                }
+              >
+                <option value={1}>周一</option>
+                <option value={2}>周二</option>
+                <option value={3}>周三</option>
+                <option value={4}>周四</option>
+                <option value={5}>周五</option>
+              </select>
+            </label>
+          )}
+          {config.rebalance.frequency === "monthly" && (
+            <label>
+              调仓日期
+              <input
+                max={31}
+                min={1}
+                type="number"
+                value={config.rebalance.monthlyDay ?? 1}
+                onChange={(event) =>
+                  onChange({
+                    ...config,
+                    rebalance: {
+                      ...config.rebalance,
+                      monthlyDay: Math.round(
+                        boundedNumber(Number(event.target.value), config.rebalance.monthlyDay ?? 1, 1, 31)
+                      )
+                    }
+                  })
+                }
+              />
+            </label>
+          )}
           <label>
             持仓数量
             <input
@@ -213,15 +313,23 @@ function BaseStrategyEditor({
               type="number"
               value={config.portfolio.topN}
               onChange={(event) =>
-                onChange({
-                  ...config,
-                  portfolio: {
-                    ...config.portfolio,
-                    topN: Math.round(
-                      boundedNumber(Number(event.target.value), config.portfolio.topN, 1, 6)
-                    )
-                  }
-                })
+                {
+                  const topN = Math.round(
+                    boundedNumber(Number(event.target.value), config.portfolio.topN, 1, 6)
+                  );
+
+                  onChange({
+                    ...config,
+                    portfolio: {
+                      ...config.portfolio,
+                      topN,
+                      fixedWeights: normalizeFixedWeights(
+                        config.portfolio.fixedWeights ?? [],
+                        topN
+                      )
+                    }
+                  });
+                }
               }
             />
           </label>
@@ -234,13 +342,18 @@ function BaseStrategyEditor({
                   ...config,
                   portfolio: {
                     ...config.portfolio,
-                    weighting: event.target.value as WeightingMethod
+                    weighting: event.target.value as WeightingMethod,
+                    fixedWeights: normalizeFixedWeights(
+                      config.portfolio.fixedWeights ?? [],
+                      config.portfolio.topN
+                    )
                   }
                 })
               }
             >
               <option value="equal">等权</option>
               <option value="score">按得分</option>
+              <option value="fixed">固定比例</option>
             </select>
           </label>
           <label>
@@ -288,14 +401,48 @@ function BaseStrategyEditor({
             <small>{((liquidityFilter?.value ?? 0) / 100_000_000).toFixed(1)} 亿</small>
           </label>
         </div>
+        {config.portfolio.weighting === "fixed" && (
+          <div className="fixed-weight-list">
+            {fixedWeights.map((weight, index) => (
+              <label key={index}>
+                {`第${index + 1}名比例`}
+                <input
+                  max={1}
+                  min={0}
+                  step={0.01}
+                  type="number"
+                  value={weight}
+                  onChange={(event) =>
+                    onChange(
+                      updateFixedWeight(
+                        config,
+                        index,
+                        boundedNumber(Number(event.target.value), weight, 0, 1)
+                      )
+                    )
+                  }
+                />
+                <small>{(weight * 100).toFixed(0)}%</small>
+              </label>
+            ))}
+          </div>
+        )}
       </Section>
 
       <Section
         title="ETF 池"
         action={<span className="section-note">{config.universe.length} 个已选</span>}
       >
+        <label className="etf-search">
+          <Search size={16} />
+          <input
+            placeholder="输入 ETF 名称、代码、分类或跟踪指数"
+            value={etfQuery}
+            onChange={(event) => setEtfQuery(event.target.value)}
+          />
+        </label>
         <div className="universe-grid">
-          {profiles.map((profile) => {
+          {etfMatches.map((profile) => {
             const checked = config.universe.includes(profile.symbol);
             return (
               <label className={checked ? "etf-option checked" : "etf-option"} key={profile.symbol}>
@@ -319,6 +466,9 @@ function BaseStrategyEditor({
             );
           })}
         </div>
+        {etfMatches.length === 0 && (
+          <div className="empty-state">没有匹配的 ETF</div>
+        )}
       </Section>
 
       <Section
@@ -483,7 +633,7 @@ function CompositeStrategyEditor({
                     <small>{strategy.description}</small>
                   </span>
                 </label>
-                <label>
+                <label className="component-weight-control">
                   权重
                   <input
                     disabled={!component}
@@ -491,6 +641,23 @@ function CompositeStrategyEditor({
                     min={0}
                     step={0.01}
                     type="range"
+                    value={component?.weight ?? 0}
+                    onChange={(event) =>
+                      onChange(
+                        updateComponentWeight(
+                          config,
+                          strategy.id,
+                          boundedNumber(Number(event.target.value), component?.weight ?? 0, 0, 1)
+                        )
+                      )
+                    }
+                  />
+                  <input
+                    disabled={!component}
+                    max={1}
+                    min={0}
+                    step={0.01}
+                    type="number"
                     value={component?.weight ?? 0}
                     onChange={(event) =>
                       onChange(

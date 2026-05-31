@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { BacktestResult, StrategyConfig } from "../core/types";
+import { nextRebalanceHint } from "../core/date";
 import { formatNumber, formatPercent, MetricTile, Section } from "./ui";
 import { SignalPanel } from "./SignalPanel";
 
@@ -7,7 +8,7 @@ function strategySummary(config: StrategyConfig, rebalanceCount: number): string
   if (config.kind === "composite") {
     return `组合策略 · ${config.components.length} 个子策略`;
   }
-  return `${config.rebalance.frequency} · Top ${config.portfolio.topN} · ${rebalanceCount} 次调仓`;
+  return `${nextRebalanceHint(config.rebalance)} · Top ${config.portfolio.topN} · ${rebalanceCount} 次调仓`;
 }
 
 export function Dashboard({

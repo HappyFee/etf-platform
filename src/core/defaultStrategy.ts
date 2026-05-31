@@ -72,11 +72,14 @@ export const defaultStrategy: BaseStrategyConfig = {
     }
   ],
   rebalance: {
-    frequency: "weekly"
+    frequency: "weekly",
+    weeklyDay: 1,
+    monthlyDay: 1
   },
   portfolio: {
     topN: 3,
-    weighting: "equal"
+    weighting: "equal",
+    fixedWeights: [0.4, 0.3, 0.3]
   },
   transactionCostBps: 6,
   risk: {

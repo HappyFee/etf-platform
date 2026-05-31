@@ -11,7 +11,7 @@ export type FilterOperator = ">" | ">=" | "<" | "<=";
 
 export type RebalanceFrequency = "daily" | "weekly" | "monthly";
 
-export type WeightingMethod = "equal" | "score";
+export type WeightingMethod = "equal" | "score" | "fixed";
 
 export interface MarketBar {
   symbol: string;
@@ -53,11 +53,14 @@ export interface FilterRule {
 
 export interface RebalanceConfig {
   frequency: RebalanceFrequency;
+  weeklyDay?: number;
+  monthlyDay?: number;
 }
 
 export interface PortfolioConfig {
   topN: number;
   weighting: WeightingMethod;
+  fixedWeights?: number[];
 }
 
 export interface RiskConfig {
