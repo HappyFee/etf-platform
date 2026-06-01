@@ -1,4 +1,12 @@
-import { Activity, BarChart3, BellRing, LibraryBig, SlidersHorizontal } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  Database,
+  Layers3,
+  LibraryBig,
+  SlidersHorizontal
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BacktestCharts } from "./components/BacktestCharts";
 import { Dashboard } from "./components/Dashboard";
@@ -139,15 +147,23 @@ export function App() {
             <p className="subtitle">{config.description}</p>
           </div>
           <div className="status-stack" aria-label="策略状态">
-            <span>
+            <span className="status-chip status-chip--primary">
               <Activity size={16} />
               {result.latestSignal.date}
             </span>
-            <span>数据截至 {dataLatestDate}</span>
-            <span>{isDemoDataset ? "演示数据" : dataset.source}</span>
-            <span>ETF {symbolCoverage}</span>
-            <span>{config.kind === "composite" ? "组合策略" : "基础策略"}</span>
-            <strong>{result.latestSignal.holdings.length} 个持仓</strong>
+            <span className={isDemoDataset ? "status-chip status-chip--warn" : "status-chip"}>
+              <Database size={16} />
+              数据截至 {dataLatestDate}
+            </span>
+            <span className="status-chip">{isDemoDataset ? "演示数据" : dataset.source}</span>
+            <span className="status-chip">ETF {symbolCoverage}</span>
+            <span className="status-chip">
+              <Layers3 size={16} />
+              {config.kind === "composite" ? "组合策略" : "基础策略"}
+            </span>
+            <strong className="status-chip status-chip--strong">
+              {result.latestSignal.holdings.length} 个持仓
+            </strong>
           </div>
         </div>
       </header>
