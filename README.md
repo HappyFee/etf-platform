@@ -45,7 +45,7 @@ The app ships deterministic demonstration data in `src/core/sampleData.ts`, so i
 To fetch real ETF daily bars with akshare:
 
 ```bash
-python -m pip install akshare pandas
+python -m pip install akshare pandas curl_cffi
 python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.generated.json
 ```
 
