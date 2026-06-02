@@ -358,6 +358,56 @@ small {
   gap: 14px;
 }
 
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 14px;
+}
+
+.assumption-list,
+.quality-summary,
+.compact-metrics,
+.robustness-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.assumption-list {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.assumption-list span,
+.quality-summary span,
+.compact-metrics span,
+.robustness-card {
+  border: 1px solid #e0e7e8;
+  border-radius: var(--radius);
+  padding: 11px 12px;
+  background: #f8fbfb;
+}
+
+.compact-metrics,
+.quality-summary,
+.robustness-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.compact-metrics span,
+.robustness-card {
+  display: grid;
+  gap: 6px;
+}
+
+.compact-metrics strong,
+.robustness-card strong {
+  color: var(--accent-strong);
+  font-size: 20px;
+}
+
+.robustness-card small {
+  line-height: 1.45;
+}
+
 .holdings-panel,
 .ranking-panel {
   padding: 14px;
@@ -749,7 +799,8 @@ input[type="checkbox"] {
   }
 
   .chart-grid,
-  .signal-layout {
+  .signal-layout,
+  .diagnostic-grid {
     grid-template-columns: 1fr;
   }
 
@@ -776,7 +827,11 @@ input[type="checkbox"] {
   .control-grid,
   .universe-grid,
   .fixed-weight-list,
-  .factor-groups {
+  .factor-groups,
+  .assumption-list,
+  .compact-metrics,
+  .quality-summary,
+  .robustness-grid {
     grid-template-columns: 1fr;
   }
 

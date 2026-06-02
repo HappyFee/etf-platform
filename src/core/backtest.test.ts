@@ -15,6 +15,8 @@ describe("backtest engine", () => {
     expect(result.rebalances.length).toBeGreaterThan(20);
     expect(result.metrics.totalReturn).toBeGreaterThan(-1);
     expect(result.metrics.maxDrawdown).toBeGreaterThanOrEqual(0);
+    expect(result.benchmark?.equityCurve.length).toBe(result.equityCurve.length);
+    expect(result.metrics.benchmarkTotalReturn).toBeTypeOf("number");
     expect(result.latestSignal.holdings.length).toBeLessThanOrEqual(
       defaultStrategy.portfolio.topN
     );
@@ -113,6 +115,9 @@ describe("backtest engine", () => {
       (point) => point.date === firstRebalance.date
     )!;
 
+    expect(firstRebalance.signalDate).not.toBe(firstRebalance.tradeDate);
+    expect(firstRebalance.costBps).toBe(1000);
+    expect(firstRebalance.slippageBps).toBeGreaterThan(0);
     expect(curvePoint.dailyReturn).toBeLessThan(0);
   });
 

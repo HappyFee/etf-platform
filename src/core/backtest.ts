@@ -4,12 +4,14 @@ import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from
 import { groupBarsBySymbol } from "./sampleData";
 import type {
   BaseStrategyConfig,
+  BenchmarkResult,
   BacktestMetrics,
   BacktestResult,
   CompositeStrategyConfig,
   EquityPoint,
   EtfProfile,
   EvaluationRow,
+  ExecutionConfig,
   Holding,
   MarketBar,
   RebalanceEvent,
@@ -28,6 +30,13 @@ interface DailyPortfolioReturn {
   warnings: string[];
 }
 
+interface PendingRebalance {
+  signalDate: string;
+  tradeDate: string;
+  holdings: Holding[];
+  rankings: EvaluationRow[];
+}
+
 function uniqueSortedDates(bars: MarketBar[]): string[] {
   return [...new Set(bars.map((bar) => bar.date))].sort();
 }
@@ -36,6 +45,13 @@ function getClose(barsBySymbol: Map<string, MarketBar[]>, symbol: string, date: 
   const bars = barsBySymbol.get(symbol);
   const bar = bars?.find((item) => item.date === date);
   return bar?.close ?? null;
+}
+
+function defaultExecution(config: StrategyConfig): ExecutionConfig {
+  return {
+    price: config.execution?.price ?? "next_close",
+    slippageBps: Math.max(0, config.execution?.slippageBps ?? 3)
+  };
 }
 
 function dailyPortfolioReturn(
@@ -130,7 +146,11 @@ function drawdownAt(equity: number, peak: number): number {
   return peak === 0 ? 0 : Math.max(0, (peak - equity) / peak);
 }
 
-function calculateMetrics(curve: EquityPoint[], rebalances: RebalanceEvent[]): BacktestMetrics {
+function calculateMetrics(
+  curve: EquityPoint[],
+  rebalances: RebalanceEvent[],
+  benchmarkCurve?: EquityPoint[]
+): BacktestMetrics {
   if (curve.length === 0) {
     return {
       totalReturn: 0,
@@ -155,6 +175,29 @@ function calculateMetrics(curve: EquityPoint[], rebalances: RebalanceEvent[]): B
   const positiveDays = returns.filter((value) => value > 0).length;
   const activeDays = returns.filter((value) => value !== 0).length;
   const averageTurnover = mean(rebalances.map((event) => event.turnover));
+  const benchmarkFinalEquity = benchmarkCurve?.at(-1)?.equity;
+  const benchmarkTotalReturn =
+    benchmarkFinalEquity === undefined ? undefined : benchmarkFinalEquity - 1;
+  const excessReturns =
+    benchmarkCurve && benchmarkCurve.length > 1
+      ? curve
+          .slice(1)
+          .map((point, index) => point.dailyReturn - (benchmarkCurve[index + 1]?.dailyReturn ?? 0))
+      : [];
+  const benchmarkAnnualizedReturn =
+    benchmarkFinalEquity === undefined
+      ? undefined
+      : benchmarkFinalEquity > 0
+        ? benchmarkFinalEquity ** (1 / years) - 1
+        : -1;
+  const excessAnnualizedReturn =
+    benchmarkAnnualizedReturn === undefined
+      ? undefined
+      : annualizedReturn - benchmarkAnnualizedReturn;
+  const informationRatio =
+    excessReturns.length === 0
+      ? undefined
+      : safeDivide(mean(excessReturns) * 252, standardDeviation(excessReturns) * Math.sqrt(252));
 
   return {
     totalReturn,
@@ -165,8 +208,71 @@ function calculateMetrics(curve: EquityPoint[], rebalances: RebalanceEvent[]): B
     calmar: safeDivide(annualizedReturn, maxCurveDrawdown),
     winRate: activeDays === 0 ? 0 : positiveDays / activeDays,
     rebalanceCount: rebalances.length,
-    averageTurnover
+    averageTurnover,
+    benchmarkTotalReturn,
+    excessAnnualizedReturn,
+    informationRatio
   };
+}
+
+function buildBenchmark(
+  barsBySymbol: Map<string, MarketBar[]>,
+  profiles: EtfProfile[],
+  universe: string[],
+  dates: string[],
+  startIndex: number,
+  cashReturnAnnual: number
+): BenchmarkResult {
+  const symbols = universe.filter((symbol) => barsBySymbol.has(symbol));
+  const profileBySymbol = new Map(profiles.map((profile) => [profile.symbol, profile]));
+  const holdings: Holding[] = symbols.map((symbol) => ({
+    symbol,
+    name: profileBySymbol.get(symbol)?.name ?? symbol,
+    weight: symbols.length === 0 ? 0 : 1 / symbols.length
+  }));
+  const curve: EquityPoint[] = [];
+  let equity = 1;
+  let peak = 1;
+
+  for (let index = startIndex; index < dates.length; index += 1) {
+    const date = dates[index];
+    const dailyReturn =
+      index === startIndex
+        ? 0
+        : dailyPortfolioReturn(
+            barsBySymbol,
+            dates[index - 1],
+            date,
+            holdings,
+            cashReturnAnnual
+          ).dailyReturn;
+    equity *= 1 + dailyReturn;
+    peak = Math.max(peak, equity);
+    curve.push({
+      date,
+      equity,
+      dailyReturn,
+      drawdown: drawdownAt(equity, peak)
+    });
+  }
+
+  return {
+    name: "ETF池等权基准",
+    equityCurve: curve,
+    metrics: calculateMetrics(curve, [])
+  };
+}
+
+function attachBenchmark(curve: EquityPoint[], benchmark: BenchmarkResult): EquityPoint[] {
+  const benchmarkByDate = new Map(benchmark.equityCurve.map((point) => [point.date, point]));
+  return curve.map((point) => {
+    const benchmarkPoint = benchmarkByDate.get(point.date);
+    return {
+      ...point,
+      benchmarkEquity: benchmarkPoint?.equity,
+      excessReturn: benchmarkPoint ? point.equity - benchmarkPoint.equity : undefined
+    };
+  });
 }
 
 function warmupLength(config: BaseStrategyConfig): number {
@@ -188,9 +294,19 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   const barsBySymbol = groupBarsBySymbol(input.bars);
   const dates = uniqueSortedDates(input.bars);
   const startIndex = Math.min(warmupLength(input.config), Math.max(0, dates.length - 2));
+  const execution = defaultExecution(input.config);
+  const benchmark = buildBenchmark(
+    barsBySymbol,
+    input.profiles,
+    input.config.universe,
+    dates,
+    startIndex,
+    input.config.risk.cashReturnAnnual
+  );
   const curve: EquityPoint[] = [];
   const rebalances: RebalanceEvent[] = [];
   const warnings: string[] = [];
+  let pendingRebalance: PendingRebalance | null = null;
   let holdings: Holding[] = [];
   let equity = 1;
   let peak = 1;
@@ -220,20 +336,13 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       });
     }
 
-    if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
-      const evaluation = evaluateUniverse({
-        barsBySymbol,
-        profiles: input.profiles,
-        config: input.config,
-        date
-      });
-      warnings.push(...evaluation.warnings);
-
-      const nextHoldings = holdingsFromRows(evaluation.rows, input.config);
+    if (pendingRebalance && pendingRebalance.tradeDate === date) {
+      const nextHoldings = pendingRebalance.holdings;
       const turnover = calculateTurnover(holdings, nextHoldings);
+      const totalCostBps = input.config.transactionCostBps + execution.slippageBps;
       const previousCurvePoint = curve.length > 1 ? curve[curve.length - 2] : undefined;
       const dayStartingEquity = previousCurvePoint?.equity ?? 1;
-      equity *= 1 - (turnover * input.config.transactionCostBps) / 10_000;
+      equity *= 1 - (turnover * totalCostBps) / 10_000;
       peak = Math.max(peak, equity);
       const latestPoint = curve.at(-1);
       if (latestPoint) {
@@ -246,10 +355,38 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       holdings = nextHoldings;
       rebalances.push({
         date,
+        signalDate: pendingRebalance.signalDate,
+        tradeDate: pendingRebalance.tradeDate,
         holdings,
-        rankings: evaluation.rows,
-        turnover
+        rankings: pendingRebalance.rankings,
+        turnover,
+        costBps: input.config.transactionCostBps,
+        slippageBps: execution.slippageBps
       });
+      pendingRebalance = null;
+    }
+
+    if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
+      const evaluation = evaluateUniverse({
+        barsBySymbol,
+        profiles: input.profiles,
+        config: input.config,
+        date
+      });
+      warnings.push(...evaluation.warnings);
+
+      const nextHoldings = holdingsFromRows(evaluation.rows, input.config);
+      const tradeDate = dates[index + 1];
+      if (tradeDate) {
+        pendingRebalance = {
+          signalDate: date,
+          tradeDate,
+          holdings: nextHoldings,
+          rankings: evaluation.rows
+        };
+      } else {
+        warnings.push(`${date} 已是最后一个交易日，信号仅用于跟踪，不纳入回测成交。`);
+      }
     }
   }
 
@@ -264,17 +401,21 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
 
   const latestRebalance = rebalances.at(-1);
   const latestHoldings =
-    latestRebalance?.holdings ?? holdingsFromRows(latestEvaluation.rows, input.config);
+    latestEvaluation.rows.length > 0
+      ? holdingsFromRows(latestEvaluation.rows, input.config)
+      : latestRebalance?.holdings ?? holdings;
+  const equityCurve = attachBenchmark(curve, benchmark);
 
   return {
-    equityCurve: curve,
+    equityCurve,
     rebalances,
-    metrics: calculateMetrics(curve, rebalances),
+    metrics: calculateMetrics(equityCurve, rebalances, benchmark.equityCurve),
+    benchmark,
     latestSignal: {
       date: latestDate,
       holdings: latestHoldings,
       rankings: latestEvaluation.rows,
-      nextRebalanceHint: nextRebalanceHint(input.config.rebalance)
+      nextRebalanceHint: `${nextRebalanceHint(input.config.rebalance)}；信号收盘后生成，下一交易日${execution.price === "next_close" ? "收盘" : "开盘"}成交`
     },
     warnings: warningsFrom(warnings)
   };

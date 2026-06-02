@@ -21,6 +21,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
   const equityData = result.equityCurve.map((point) => ({
     date: point.date,
     equity: Number(point.equity.toFixed(4)),
+    benchmark: point.benchmarkEquity ? Number(point.benchmarkEquity.toFixed(4)) : undefined,
     drawdown: Number((-point.drawdown * 100).toFixed(2))
   }));
 
@@ -49,6 +50,14 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
               dataKey="equity"
               stroke="#0f766e"
               strokeWidth={2.4}
+              dot={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="benchmark"
+              stroke="#8a4f7d"
+              strokeWidth={1.8}
+              strokeDasharray="5 5"
               dot={false}
             />
           </LineChart>

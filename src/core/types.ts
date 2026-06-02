@@ -13,6 +13,8 @@ export type RebalanceFrequency = "daily" | "weekly" | "monthly";
 
 export type WeightingMethod = "equal" | "score" | "fixed";
 
+export type ExecutionPrice = "next_open" | "next_close";
+
 export interface MarketBar {
   symbol: string;
   date: string;
@@ -67,6 +69,11 @@ export interface RiskConfig {
   cashReturnAnnual: number;
 }
 
+export interface ExecutionConfig {
+  price: ExecutionPrice;
+  slippageBps: number;
+}
+
 export interface BaseStrategyConfig {
   kind: "base";
   id: string;
@@ -78,6 +85,7 @@ export interface BaseStrategyConfig {
   rebalance: RebalanceConfig;
   portfolio: PortfolioConfig;
   transactionCostBps: number;
+  execution?: ExecutionConfig;
   risk: RiskConfig;
 }
 
@@ -93,6 +101,7 @@ export interface CompositeStrategyConfig {
   description: string;
   components: StrategyComponent[];
   transactionCostBps: number;
+  execution?: ExecutionConfig;
   risk: RiskConfig;
 }
 
@@ -155,13 +164,19 @@ export interface EquityPoint {
   equity: number;
   dailyReturn: number;
   drawdown: number;
+  benchmarkEquity?: number;
+  excessReturn?: number;
 }
 
 export interface RebalanceEvent {
   date: string;
+  signalDate?: string;
+  tradeDate?: string;
   holdings: Holding[];
   rankings: EvaluationRow[];
   turnover: number;
+  costBps?: number;
+  slippageBps?: number;
 }
 
 export interface BacktestMetrics {
@@ -174,6 +189,50 @@ export interface BacktestMetrics {
   winRate: number;
   rebalanceCount: number;
   averageTurnover: number;
+  benchmarkTotalReturn?: number;
+  excessAnnualizedReturn?: number;
+  informationRatio?: number;
+}
+
+export interface BenchmarkResult {
+  name: string;
+  equityCurve: EquityPoint[];
+  metrics: BacktestMetrics;
+}
+
+export interface DataQualitySymbol {
+  symbol: string;
+  name: string;
+  startDate: string;
+  latestDate: string;
+  barCount: number;
+  missingDays: number;
+  coverageRatio: number;
+  averageAmount: number;
+  warnings: string[];
+}
+
+export interface DataQualityReport {
+  latestDate: string;
+  earliestDate: string;
+  symbolCount: number;
+  staleSymbols: string[];
+  estimatedAmountSymbols: string[];
+  symbols: DataQualitySymbol[];
+  warnings: string[];
+}
+
+export interface RobustnessCase {
+  name: string;
+  totalReturn: number;
+  annualizedReturn: number;
+  maxDrawdown: number;
+  sharpe: number;
+}
+
+export interface RobustnessReport {
+  cases: RobustnessCase[];
+  summary: string;
 }
 
 export interface LatestSignal {
@@ -187,6 +246,7 @@ export interface BacktestResult {
   equityCurve: EquityPoint[];
   rebalances: RebalanceEvent[];
   metrics: BacktestMetrics;
+  benchmark?: BenchmarkResult;
   latestSignal: LatestSignal;
   warnings: string[];
 }

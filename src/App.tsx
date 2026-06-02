@@ -13,6 +13,7 @@ import { Dashboard } from "./components/Dashboard";
 import { FactorLibrary } from "./components/FactorLibrary";
 import { SignalPanel } from "./components/SignalPanel";
 import { StrategyLab } from "./components/StrategyLab";
+import { buildDataQualityReport, buildRobustnessReport } from "./core/analysis";
 import { defaultStrategies, defaultStrategy, defaultCompositeStrategy } from "./core/defaultStrategy";
 import { runBacktest } from "./core/backtest";
 import { loadGeneratedDataset, sampleDataset } from "./core/dataSource";
@@ -77,6 +78,20 @@ export function App() {
     [config, dataset, strategies]
   );
   const dataLatestDate = dataset.latestDate ?? result.latestSignal.date;
+  const dataQuality = useMemo(
+    () => buildDataQualityReport(dataset.bars, dataset.profiles),
+    [dataset]
+  );
+  const robustness = useMemo(
+    () =>
+      buildRobustnessReport({
+        bars: dataset.bars,
+        profiles: dataset.profiles,
+        config,
+        strategyBook: strategies
+      }),
+    [config, dataset, strategies]
+  );
   const isDemoDataset = dataset.source.startsWith("demo");
   const symbolCoverage =
     dataset.requestedSymbols?.length && dataset.succeededSymbols?.length
@@ -187,7 +202,12 @@ export function App() {
 
       <div className="workspace">
         {activeTab === "overview" && (
-          <Dashboard result={result} config={config}>
+          <Dashboard
+            result={result}
+            config={config}
+            dataQuality={dataQuality}
+            robustness={robustness}
+          >
             <BacktestCharts result={result} />
           </Dashboard>
         )}
