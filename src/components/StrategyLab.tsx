@@ -6,7 +6,9 @@ import type {
   BaseStrategyConfig,
   CompositeStrategyConfig,
   EtfProfile,
+  FactorDirection,
   FactorSelection,
+  FilterOperator,
   FilterRule,
   RebalanceFrequency,
   StrategyConfig,
@@ -34,7 +36,7 @@ function updateFactor(
   return {
     ...config,
     factors: config.factors.map((factor) =>
-      factor.key === key ? { ...factor, ...patch } : factor
+      (factor.key ?? factor.id) === key ? { ...factor, ...patch } : factor
     )
   };
 }
@@ -48,7 +50,7 @@ function updateFactorParam(
   return {
     ...config,
     factors: config.factors.map((factor) =>
-      factor.key === key
+      (factor.key ?? factor.id) === key
         ? {
             ...factor,
             params: {
@@ -61,8 +63,49 @@ function updateFactorParam(
   };
 }
 
+function createFactorSelection(factorId: string, index: number): FactorSelection {
+  const definition = factorCatalog.find((factor) => factor.id === factorId) ?? factorCatalog[0];
+  return {
+    key: `${definition.id}-${Date.now()}-${index}`,
+    id: definition.id,
+    enabled: true,
+    weight: 0.1,
+    direction: definition.defaultDirection,
+    params: { ...definition.defaultParams }
+  };
+}
+
+function addFactor(config: BaseStrategyConfig, factorId: string): BaseStrategyConfig {
+  return {
+    ...config,
+    factors: [...config.factors, createFactorSelection(factorId, config.factors.length)]
+  };
+}
+
+function duplicateFactor(config: BaseStrategyConfig, factor: FactorSelection): BaseStrategyConfig {
+  return {
+    ...config,
+    factors: [
+      ...config.factors,
+      {
+        ...factor,
+        key: `${factor.id}-${Date.now()}-${config.factors.length}`,
+        params: { ...(factor.params ?? {}) }
+      }
+    ]
+  };
+}
+
+function removeFactor(config: BaseStrategyConfig, key: string): BaseStrategyConfig {
+  return {
+    ...config,
+    factors: config.factors.filter((factor) => (factor.key ?? factor.id) !== key)
+  };
+}
+
 function updateLiquidityFilter(config: BaseStrategyConfig, value: number): BaseStrategyConfig {
   const nextFilter: FilterRule = {
+    key: "liquidity-filter",
     factorId: "amount_ma",
     operator: ">=",
     value,
@@ -71,6 +114,62 @@ function updateLiquidityFilter(config: BaseStrategyConfig, value: number): BaseS
 
   const otherFilters = config.filters.filter((filter) => filter.factorId !== "amount_ma");
   return { ...config, filters: [nextFilter, ...otherFilters] };
+}
+
+function createFilterRule(index: number): FilterRule {
+  return {
+    key: `filter-${Date.now()}-${index}`,
+    factorId: "amount_ma",
+    operator: ">=",
+    value: 100_000_000,
+    params: { window: 20 }
+  };
+}
+
+function updateFilter(
+  config: BaseStrategyConfig,
+  key: string,
+  patch: Partial<FilterRule>
+): BaseStrategyConfig {
+  return {
+    ...config,
+    filters: config.filters.map((filter, index) =>
+      (filter.key ?? `${filter.factorId}-${index}`) === key
+        ? { ...filter, ...patch }
+        : filter
+    )
+  };
+}
+
+function updateFilterParam(
+  config: BaseStrategyConfig,
+  key: string,
+  paramKey: string,
+  value: number
+): BaseStrategyConfig {
+  return {
+    ...config,
+    filters: config.filters.map((filter, index) =>
+      (filter.key ?? `${filter.factorId}-${index}`) === key
+        ? {
+            ...filter,
+            params: {
+              ...(filter.params ?? {}),
+              [paramKey]: value
+            }
+          }
+        : filter
+    )
+  };
+}
+
+function removeFilter(config: BaseStrategyConfig, key: string): BaseStrategyConfig {
+  return {
+    ...config,
+    filters: config.filters.filter(
+      (filter, index) => (filter.key ?? `${filter.factorId}-${index}`) !== key
+    )
+  };
 }
 
 function normalizeFixedWeights(weights: number[], count: number): number[] {
@@ -208,6 +307,7 @@ function BaseStrategyEditor({
   const factorById = new Map(factorCatalog.map((factor) => [factor.id, factor]));
   const liquidityFilter = config.filters.find((filter) => filter.factorId === "amount_ma");
   const [etfQuery, setEtfQuery] = useState("");
+  const [factorToAdd, setFactorToAdd] = useState(factorCatalog[0]?.id ?? "return");
   const fixedWeights = normalizeFixedWeights(
     config.portfolio.fixedWeights ?? [],
     config.portfolio.topN
@@ -377,6 +477,56 @@ function BaseStrategyEditor({
             />
           </label>
           <label>
+            最大单仓
+            <input
+              data-testid="max-position-input"
+              max={1}
+              min={0}
+              step={0.01}
+              type="number"
+              value={config.risk.maxPositionWeight ?? 1}
+              onChange={(event) =>
+                onChange({
+                  ...config,
+                  risk: {
+                    ...config.risk,
+                    maxPositionWeight: boundedNumber(
+                      Number(event.target.value),
+                      config.risk.maxPositionWeight ?? 1,
+                      0,
+                      1
+                    )
+                  }
+                })
+              }
+            />
+          </label>
+          <label>
+            最低现金
+            <input
+              data-testid="min-cash-input"
+              max={1}
+              min={0}
+              step={0.01}
+              type="number"
+              value={config.risk.minCashWeight ?? 0}
+              onChange={(event) =>
+                onChange({
+                  ...config,
+                  risk: {
+                    ...config.risk,
+                    minCashWeight: boundedNumber(
+                      Number(event.target.value),
+                      config.risk.minCashWeight ?? 0,
+                      0,
+                      1
+                    )
+                  }
+                })
+              }
+            />
+          </label>
+          <label>
             成交额过滤
             <input
               max={1_000_000_000}
@@ -473,7 +623,26 @@ function BaseStrategyEditor({
 
       <Section
         title="因子权重与参数"
-        action={<span className="section-note">累计收益 {formatPercent(result.metrics.totalReturn)}</span>}
+        action={
+          <div className="inline-actions">
+            <select value={factorToAdd} onChange={(event) => setFactorToAdd(event.target.value)}>
+              {factorCatalog.map((factor) => (
+                <option key={factor.id} value={factor.id}>
+                  {factor.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="text-action"
+              data-testid="add-factor-button"
+              onClick={() => onChange(addFactor(config, factorToAdd))}
+              type="button"
+            >
+              <Plus size={16} />
+              添加因子
+            </button>
+          </div>
+        }
       >
         <div className="factor-controls factor-controls--parametric">
           {config.factors.map((factor) => {
@@ -494,6 +663,41 @@ function BaseStrategyEditor({
                     <small>{factor.direction === "desc" ? "高优先" : "低优先"}</small>
                   </span>
                 </label>
+                <div className="inline-actions inline-actions--compact">
+                  <label>
+                    方向
+                    <select
+                      value={factor.direction}
+                      onChange={(event) =>
+                        onChange(
+                          updateFactor(config, factorKey, {
+                            direction: event.target.value as FactorDirection
+                          })
+                        )
+                      }
+                    >
+                      <option value="desc">高优先</option>
+                      <option value="asc">低优先</option>
+                    </select>
+                  </label>
+                  <button
+                    className="icon-action"
+                    onClick={() => onChange(duplicateFactor(config, factor))}
+                    title="复制因子"
+                    type="button"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    className="icon-action danger"
+                    disabled={config.factors.length <= 1}
+                    onClick={() => onChange(removeFactor(config, factorKey))}
+                    title="删除因子"
+                    type="button"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
                 <label>
                   权重
                   <input
@@ -550,6 +754,146 @@ function BaseStrategyEditor({
                     </label>
                   );
                 })}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section
+        title="筛选条件"
+        action={
+          <button
+            className="text-action"
+            data-testid="add-filter-button"
+            onClick={() =>
+              onChange({ ...config, filters: [...config.filters, createFilterRule(config.filters.length)] })
+            }
+            type="button"
+          >
+            <Plus size={16} />
+            添加条件
+          </button>
+        }
+      >
+        <div className="filter-list">
+          {config.filters.map((filter, index) => {
+            const filterKey = filter.key ?? `${filter.factorId}-${index}`;
+            const definition = factorById.get(filter.factorId);
+            const currentWindow =
+              typeof filter.params?.window === "number"
+                ? (filter.params.window as number)
+                : Number(definition?.defaultParams.window ?? 20);
+
+            return (
+              <div className="filter-row" key={filterKey}>
+                <label>
+                  因子
+                  <select
+                    value={filter.factorId}
+                    onChange={(event) => {
+                      const nextDefinition = factorById.get(event.target.value);
+                      onChange(
+                        updateFilter(config, filterKey, {
+                          factorId: event.target.value,
+                          params: { ...(nextDefinition?.defaultParams ?? {}) }
+                        })
+                      );
+                    }}
+                  >
+                    {factorCatalog.map((factor) => (
+                      <option key={factor.id} value={factor.id}>
+                        {factor.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  条件
+                  <select
+                    value={filter.operator}
+                    onChange={(event) =>
+                      onChange(
+                        updateFilter(config, filterKey, {
+                          operator: event.target.value as FilterOperator
+                        })
+                      )
+                    }
+                  >
+                    <option value=">=">大于等于</option>
+                    <option value=">">大于</option>
+                    <option value="<=">小于等于</option>
+                    <option value="<">小于</option>
+                    <option value="between">区间</option>
+                  </select>
+                </label>
+                <label>
+                  数值
+                  <input
+                    step={0.01}
+                    type="number"
+                    value={filter.value}
+                    onChange={(event) =>
+                      onChange(
+                        updateFilter(config, filterKey, {
+                          value: Number(event.target.value)
+                        })
+                      )
+                    }
+                  />
+                </label>
+                {filter.operator === "between" && (
+                  <label>
+                    上限
+                    <input
+                      step={0.01}
+                      type="number"
+                      value={filter.value2 ?? filter.value}
+                      onChange={(event) =>
+                        onChange(
+                          updateFilter(config, filterKey, {
+                            value2: Number(event.target.value)
+                          })
+                        )
+                      }
+                    />
+                  </label>
+                )}
+                {definition?.paramSchema?.map((param) => (
+                  <label key={param.key}>
+                    {param.label}
+                    <input
+                      max={param.max}
+                      min={param.min}
+                      step={param.step}
+                      type="number"
+                      value={currentWindow}
+                      onChange={(event) =>
+                        onChange(
+                          updateFilterParam(
+                            config,
+                            filterKey,
+                            param.key,
+                            boundedNumber(
+                              Number(event.target.value),
+                              currentWindow,
+                              param.min,
+                              param.max
+                            )
+                          )
+                        )
+                      }
+                    />
+                  </label>
+                ))}
+                <button
+                  className="icon-action danger"
+                  onClick={() => onChange(removeFilter(config, filterKey))}
+                  title="删除条件"
+                  type="button"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             );
           })}

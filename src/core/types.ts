@@ -7,7 +7,7 @@ export type FactorCategory =
   | "liquidity"
   | "quality";
 
-export type FilterOperator = ">" | ">=" | "<" | "<=";
+export type FilterOperator = ">" | ">=" | "<" | "<=" | "between";
 
 export type RebalanceFrequency = "daily" | "weekly" | "monthly";
 
@@ -47,9 +47,11 @@ export interface FactorSelection {
 }
 
 export interface FilterRule {
+  key?: string;
   factorId: string;
   operator: FilterOperator;
   value: number;
+  value2?: number;
   params?: FactorParams;
 }
 
@@ -67,6 +69,8 @@ export interface PortfolioConfig {
 
 export interface RiskConfig {
   cashReturnAnnual: number;
+  maxPositionWeight?: number;
+  minCashWeight?: number;
 }
 
 export interface ExecutionConfig {

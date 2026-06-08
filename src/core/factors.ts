@@ -247,11 +247,21 @@ export function computeFactorValue(
   });
 }
 
-function compareFilter(value: number | null, operator: FilterOperator, target: number): boolean {
+function compareFilter(
+  value: number | null,
+  operator: FilterOperator,
+  target: number,
+  target2?: number
+): boolean {
   if (value === null || !Number.isFinite(value)) {
     return false;
   }
 
+  if (operator === "between") {
+    const lower = Math.min(target, target2 ?? target);
+    const upper = Math.max(target, target2 ?? target);
+    return value >= lower && value <= upper;
+  }
   if (operator === ">") {
     return value > target;
   }
@@ -342,7 +352,7 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
     const passesFilters = input.config.filters.every((filter: FilterRule) => {
       const value = computeFactorValue(filter.factorId, bars, input.date, filter.params);
       filterValues[filter.factorId] = value;
-      return compareFilter(value, filter.operator, filter.value);
+      return compareFilter(value, filter.operator, filter.value, filter.value2);
     });
 
     if (!passesFilters) {

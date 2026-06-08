@@ -679,6 +679,38 @@ input[type="checkbox"] {
   gap: 10px;
 }
 
+.inline-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inline-actions--compact {
+  justify-content: flex-start;
+}
+
+.icon-action {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.icon-action.danger {
+  color: #b42318;
+}
+
 .factor-control {
   display: grid;
   grid-template-columns: minmax(170px, 0.9fr) minmax(160px, 1fr) 52px;
@@ -715,6 +747,22 @@ input[type="checkbox"] {
 .component-list {
   display: grid;
   gap: 10px;
+}
+
+.filter-list {
+  display: grid;
+  gap: 12px;
+}
+
+.filter-row {
+  align-items: end;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(150px, 1.4fr) minmax(120px, 1fr) repeat(3, minmax(90px, 0.8fr)) 40px;
+  padding: 12px;
 }
 
 .component-row {
@@ -790,7 +838,8 @@ input[type="checkbox"] {
 @media (max-width: 1180px) {
   .metric-grid,
   .control-grid,
-  .universe-grid {
+  .universe-grid,
+  .filter-row {
     grid-template-columns: repeat(3, minmax(160px, 1fr));
   }
 
@@ -831,7 +880,8 @@ input[type="checkbox"] {
   .assumption-list,
   .compact-metrics,
   .quality-summary,
-  .robustness-grid {
+  .robustness-grid,
+  .filter-row {
     grid-template-columns: 1fr;
   }
 

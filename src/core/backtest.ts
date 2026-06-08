@@ -68,6 +68,8 @@ function dailyPortfolioReturn(
   }
 
   const warnings: string[] = [];
+  const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
+  const cashWeight = Math.max(0, 1 - investedWeight);
   const dailyReturn = holdings.reduce((total, holding) => {
     const previous = getClose(barsBySymbol, holding.symbol, previousDate);
     const current = getClose(barsBySymbol, holding.symbol, currentDate);
@@ -78,7 +80,7 @@ function dailyPortfolioReturn(
       return total + holding.weight * cashDailyReturn;
     }
     return total + holding.weight * (current / previous - 1);
-  }, 0);
+  }, cashWeight * cashDailyReturn);
 
   return { dailyReturn, warnings };
 }
@@ -97,35 +99,112 @@ function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Ho
     return [];
   }
 
+  let holdings: Holding[];
+
   if (config.portfolio.weighting === "fixed") {
     const configuredWeights = config.portfolio.fixedWeights ?? [];
     const rawWeights = selected.map((_, index) => Math.max(0, configuredWeights[index] ?? 0));
     const totalWeight = rawWeights.reduce((total, weight) => total + weight, 0);
 
     if (totalWeight > 0) {
-      return selected.map((row, index) => ({
+      holdings = selected.map((row, index) => ({
         symbol: row.symbol,
         name: row.name,
         weight: rawWeights[index] / totalWeight
       }));
+      return applyRiskConstraints(holdings, config);
     }
   }
 
   if (config.portfolio.weighting === "score") {
     const scoreTotal = selected.reduce((total, row) => total + Math.max(0, row.score), 0);
     if (scoreTotal > 0) {
-      return selected.map((row) => ({
+      holdings = selected.map((row) => ({
         symbol: row.symbol,
         name: row.name,
         weight: Math.max(0, row.score) / scoreTotal
       }));
+      return applyRiskConstraints(holdings, config);
     }
   }
 
-  return selected.map((row) => ({
+  holdings = selected.map((row) => ({
     symbol: row.symbol,
     name: row.name,
     weight: 1 / selected.length
+  }));
+  return applyRiskConstraints(holdings, config);
+}
+
+function applyRiskConstraints(
+  holdings: Holding[],
+  config: BaseStrategyConfig
+): Holding[] {
+  if (holdings.length === 0) {
+    return holdings;
+  }
+
+  const minCashWeight = Math.min(1, Math.max(0, config.risk.minCashWeight ?? 0));
+  const targetInvestedWeight = Math.max(0, 1 - minCashWeight);
+  const maxPositionWeight = Math.min(
+    targetInvestedWeight,
+    Math.max(0, config.risk.maxPositionWeight ?? targetInvestedWeight)
+  );
+
+  if (targetInvestedWeight <= 0 || maxPositionWeight <= 0) {
+    return [];
+  }
+
+  let next = normalizeHoldings(holdings).map((holding) => ({
+    ...holding,
+    weight: holding.weight * targetInvestedWeight
+  }));
+
+  for (let iteration = 0; iteration < next.length; iteration += 1) {
+    const overweight = next.filter((holding) => holding.weight > maxPositionWeight);
+    if (overweight.length === 0) {
+      break;
+    }
+
+    const excess = overweight.reduce(
+      (total, holding) => total + holding.weight - maxPositionWeight,
+      0
+    );
+    next = next.map((holding) =>
+      holding.weight > maxPositionWeight
+        ? { ...holding, weight: maxPositionWeight }
+        : holding
+    );
+
+    const receivers = next.filter((holding) => holding.weight < maxPositionWeight);
+    const receiverTotal = receivers.reduce((total, holding) => total + holding.weight, 0);
+    if (receivers.length === 0 || receiverTotal <= 0) {
+      break;
+    }
+
+    next = next.map((holding) => {
+      if (holding.weight >= maxPositionWeight) {
+        return holding;
+      }
+      const addWeight = excess * (holding.weight / receiverTotal);
+      return {
+        ...holding,
+        weight: Math.min(maxPositionWeight, holding.weight + addWeight)
+      };
+    });
+  }
+
+  return next.filter((holding) => holding.weight > 0.0001);
+}
+
+function normalizeHoldings(holdings: Holding[]): Holding[] {
+  const totalWeight = holdings.reduce((total, holding) => total + Math.max(0, holding.weight), 0);
+  if (totalWeight <= 0) {
+    return holdings.map((holding) => ({ ...holding, weight: 1 / holdings.length }));
+  }
+  return holdings.map((holding) => ({
+    ...holding,
+    weight: Math.max(0, holding.weight) / totalWeight
   }));
 }
 

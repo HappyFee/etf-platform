@@ -45,4 +45,27 @@ describe("App", () => {
     expect(html).toContain("输入 ETF 名称、代码、分类或跟踪指数");
     expect(html).toContain("第1名比例");
   });
+
+  test("renders platform controls for factor instances, filters, and risk constraints", () => {
+    const html = renderToString(
+      <StrategyLab
+        activeStrategyId={defaultStrategy.id}
+        config={defaultStrategy}
+        onChange={() => undefined}
+        onCreateBase={() => undefined}
+        onCreateComposite={() => undefined}
+        onDelete={() => undefined}
+        onDuplicate={() => undefined}
+        onSelect={() => undefined}
+        profiles={etfProfiles}
+        result={runBacktest({ bars: marketBars, profiles: etfProfiles, config: defaultStrategy })}
+        strategies={defaultStrategies}
+      />
+    );
+
+    expect(html).toContain("data-testid=\"add-factor-button\"");
+    expect(html).toContain("data-testid=\"add-filter-button\"");
+    expect(html).toContain("data-testid=\"max-position-input\"");
+    expect(html).toContain("data-testid=\"min-cash-input\"");
+  });
 });

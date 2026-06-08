@@ -142,6 +142,33 @@ describe("backtest engine", () => {
     ]);
   });
 
+  test("applies max position and minimum cash constraints to selected ETF weights", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        portfolio: {
+          topN: 3,
+          weighting: "fixed",
+          fixedWeights: [0.7, 0.2, 0.1]
+        },
+        risk: {
+          ...defaultStrategy.risk,
+          maxPositionWeight: 0.4,
+          minCashWeight: 0.1
+        }
+      }
+    });
+
+    expect(result.latestSignal.holdings.every((holding) => holding.weight <= 0.4)).toBe(
+      true
+    );
+    expect(
+      result.latestSignal.holdings.reduce((total, holding) => total + holding.weight, 0)
+    ).toBeCloseTo(0.9, 6);
+  });
+
   test("warns and accrues cash return when a held ETF is missing a daily bar", () => {
     const baseline = runBacktest({
       bars: marketBars,

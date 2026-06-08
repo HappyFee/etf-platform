@@ -121,6 +121,49 @@ describe("factor engine", () => {
     expect(result.rows.every((row) => row.passesFilters)).toBe(true);
   });
 
+  test("applies between filter rules before ranking candidates", () => {
+    const grouped = groupBarsBySymbol(marketBars);
+    const evaluationDate = marketBars.at(-1)!.date;
+
+    const looseResult = evaluateUniverse({
+      barsBySymbol: grouped,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        filters: [
+          {
+            factorId: "volatility",
+            operator: "between",
+            value: 0,
+            value2: 10,
+            params: { window: 20 }
+          }
+        ]
+      },
+      date: evaluationDate
+    });
+    const strictResult = evaluateUniverse({
+      barsBySymbol: grouped,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        filters: [
+          {
+            factorId: "volatility",
+            operator: "between",
+            value: 0,
+            value2: 0.000001,
+            params: { window: 20 }
+          }
+        ]
+      },
+      date: evaluationDate
+    });
+
+    expect(looseResult.rows.length).toBeGreaterThan(0);
+    expect(strictResult.rows).toEqual([]);
+  });
+
   test("does not rank ETFs when no enabled factor can score the universe", () => {
     const grouped = groupBarsBySymbol(marketBars);
     const evaluationDate = marketBars.at(-1)!.date;
