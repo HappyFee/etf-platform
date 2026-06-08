@@ -1,6 +1,24 @@
 # A-share ETF Factor Platform
 
-配置化 A 股 ETF 因子策略平台。第一版支持 ETF 池、因子权重、流动性过滤、调仓频率、持仓数量、交易成本、回测报告和最新信号跟踪。
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+A lightweight, configurable A-share ETF factor strategy platform for research, backtesting, and signal tracking. It is designed for personal use and ordinary investors who want to turn strategy ideas into reusable configurations instead of editing code for every new idea.
+
+The project can run as a static web app on GitHub Pages, Vercel, Netlify, or Cloudflare Pages. Its calculation layer is separated from the React UI so the same strategy core can later be reused by an API service, scheduled worker, or WeChat mini program.
+
+## Features
+
+- Configurable ETF universe with search by code, name, category, or tracked index
+- Multiple user-defined base strategies
+- Composite strategies that combine existing strategies by weight
+- Parameterized factor instances, including momentum, trend, volatility, drawdown, and liquidity factors
+- Add, duplicate, remove, enable, disable, and reweight factor instances from the UI
+- Configurable pre-ranking filters, including threshold and range filters
+- Daily, weekly, and monthly rebalance schedules with selected weekday or calendar day
+- Equal-weight, score-weight, and fixed rank-based allocation
+- Risk constraints such as maximum single-position weight and minimum cash weight
+- Backtest diagnostics, benchmark comparison, data quality checks, and robustness stress tests
+- Latest signal tracking for follow-up decisions
 
 ## Stack
 
@@ -8,19 +26,19 @@
 - Vitest for core engine tests
 - Recharts for backtest charts
 - lucide-react for UI icons
-- Static deploy target: Vercel, Netlify, Cloudflare Pages
-- Optional data refresh: GitHub Actions + akshare
+- Static deployment targets: GitHub Pages, Vercel, Netlify, Cloudflare Pages
+- Optional data refresh: GitHub Actions + AkShare with fallback providers
 
-## Why This Shape
+## Design Notes
 
-The platform borrows the useful parts of strong open-source quant projects without hard-coupling the product to a heavy runtime:
+The platform borrows useful patterns from mature open-source quant projects without depending on a heavy runtime:
 
-- Qlib-inspired factor expression and feature catalog thinking
-- Zipline-inspired separation of Factor and Filter behavior
-- TA-style indicator catalog naming
-- zvt/akshare-friendly A-share ETF data adapter path
+- Qlib-inspired configuration-driven research workflow and factor catalog thinking
+- zvt-inspired separation between factor scoring, filtering, and trading decisions
+- Freqtrade-inspired parameter and protection configuration ideas
+- vectorbt-inspired direction for future parameter sweeps and strategy comparison
 
-The calculation layer lives in `src/core`, separate from React views. That keeps it reusable for a future API service, scheduled worker, or Taro-based mini program.
+The calculation layer lives in `src/core`, while React views live in `src/components`. This keeps strategy logic reusable beyond the current web UI.
 
 ## Local Development
 
@@ -40,38 +58,48 @@ npm run build
 
 ## Data
 
-The app ships deterministic demonstration data in `src/core/sampleData.ts`, so it runs immediately after install. At runtime it first tries to load `public/data/a-share-etf-bars.generated.json`; if that file is missing or invalid, it falls back to the bundled demo dataset.
+The app ships deterministic demonstration data in `src/core/sampleData.ts`, so it runs immediately after install.
 
-To fetch real ETF daily bars with akshare:
+At runtime it first tries to load:
+
+```text
+public/data/a-share-etf-bars.generated.json
+```
+
+If that file is missing or invalid, the app falls back to the bundled demo dataset.
+
+To fetch real ETF daily bars:
 
 ```bash
 python -m pip install akshare pandas curl_cffi
 python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.generated.json
 ```
 
-The included GitHub Actions workflow can refresh that generated JSON on trading days.
+The included GitHub Actions workflow can refresh the generated JSON on trading days.
 
-## Strategy DSL
+## Strategy Configuration
 
-Default strategies are defined in `src/core/defaultStrategy.ts`. The app now supports both base strategies and composite strategies.
+Default strategies are defined in `src/core/defaultStrategy.ts`. The platform supports both base strategies and composite strategies.
 
 A base strategy contains:
 
 - `universe`: selected ETF symbols
-- `factors`: enabled factor ids, weights, direction, and params
-- `filters`: pre-ranking filters such as 20-day average amount
-- `rebalance`: daily, weekly, or monthly schedule. Weekly strategies can set `weeklyDay` from Monday to Friday; monthly strategies can set `monthlyDay` from 1 to 31. Backtests adjust missing/non-trading target days to the next trading day in the same period, or the period's last trading day if there is no later trading day.
-- `portfolio`: Top N and weighting method. `equal` uses equal weights, `score` weights by normalized factor score, and `fixed` applies rank-based `fixedWeights` such as `[0.5, 0.3, 0.2]`.
+- `factors`: enabled factor ids, weights, directions, and params
+- `filters`: pre-ranking rules such as liquidity thresholds or volatility ranges
+- `rebalance`: daily, weekly, or monthly schedule
+- `portfolio`: Top N, weighting method, and optional fixed rank weights
 - `transactionCostBps`: cost applied on turnover
-- `risk`: cash return assumption when no ETF passes filters
+- `execution`: price and slippage assumptions
+- `risk`: cash return, maximum position weight, and minimum cash weight
 
 A composite strategy contains:
 
 - `components`: existing strategy ids and target weights
 - `transactionCostBps`: optional wrapper-level cost assumption
+- `execution`: wrapper execution assumptions
 - `risk`: cash return assumption
 
-Factors are parameterized. For example, the same `volatility` factor can be used with `window: 20`, `window: 50`, or any supported window without adding a new hard-coded factor id.
+Factors are parameterized. For example, the same `volatility` factor can be used with `window: 20`, `window: 50`, or any supported window without creating new hard-coded factor ids.
 
 ## Deployment
 
@@ -83,7 +111,9 @@ $env:VITE_BASE_PATH="/etf-platform/"
 npm run build
 ```
 
-The repository includes `.github/workflows/deploy-pages.yml`. Every push to `master` builds with `VITE_BASE_PATH=/etf-platform/` and deploys `dist` to GitHub Pages. The expected production URL is:
+The repository includes `.github/workflows/deploy-pages.yml`. Every push to `master` builds with `VITE_BASE_PATH=/etf-platform/` and deploys `dist` to GitHub Pages.
+
+Production URL:
 
 ```text
 https://happyfee.github.io/etf-platform/
