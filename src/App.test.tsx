@@ -1,6 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import { App, DataSourceNotice } from "./App";
+import { AccountPanel, App, DataSourceNotice } from "./App";
 import { StrategyLab } from "./components/StrategyLab";
 import { runBacktest } from "./core/backtest";
 import { defaultStrategies, defaultStrategy } from "./core/defaultStrategy";
@@ -79,5 +79,25 @@ describe("App", () => {
 
     expect(html).toContain("data-testid=\"data-source-notice\"");
     expect(html).toContain("/data/a-share-etf-bars.generated.json");
+  });
+
+  test("renders account controls for the active account", () => {
+    const html = renderToString(
+      <AccountPanel
+        account={{
+          id: "wechat-local-demo",
+          provider: "wechat",
+          displayName: "微信用户 demo"
+        }}
+        isOAuthConfigured={false}
+        onLocalLogin={() => undefined}
+        onLogout={() => undefined}
+        onWeChatLogin={() => undefined}
+      />
+    );
+
+    expect(html).toContain("data-testid=\"account-panel\"");
+    expect(html).toContain("微信用户 demo");
+    expect(html).toContain("微信登录");
   });
 });

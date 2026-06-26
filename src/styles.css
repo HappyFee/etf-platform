@@ -103,6 +103,12 @@ table {
   letter-spacing: 0;
 }
 
+.top-band__side {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
 .eyebrow,
 .subtitle {
   margin: 0;
@@ -167,6 +173,65 @@ table {
   border-color: rgba(255, 255, 255, 0.38);
   color: #fff;
   background: rgba(255, 255, 255, 0.2);
+}
+
+.account-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 420px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius);
+  padding: 10px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.account-panel__identity,
+.account-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-panel__identity span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.account-panel__identity strong,
+.account-panel__identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-panel__identity small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #0f2f2b;
+  background: #dff5ef;
+  font-weight: 900;
+}
+
+.account-panel .text-action,
+.account-panel .icon-action {
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .data-source-notice {
@@ -883,6 +948,20 @@ input[type="checkbox"] {
 
   .status-stack {
     justify-content: flex-start;
+  }
+
+  .top-band__side {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .account-panel {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .account-panel__actions {
+    flex-wrap: wrap;
   }
 
   .workspace {

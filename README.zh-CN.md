@@ -49,6 +49,34 @@ npm run dev
 
 打开 Vite 输出的本地地址即可。
 
+## 账号与微信登录
+
+平台会按账号保存策略工作区。不同账号的策略列表、当前选中策略会保存在浏览器 `localStorage` 中，互不覆盖。未登录时使用默认本地账号。
+
+微信登录有两种模式：
+
+- 未配置环境变量时，界面使用本地微信模拟登录，适合个人离线使用和开发测试。
+- 配置 `VITE_WECHAT_APP_ID` 后，点击微信登录会跳转到微信开放平台扫码授权页。
+
+真实微信登录不能在前端保存或使用 `AppSecret`。如果要完成真实账号换取，需要提供后端接口，并配置：
+
+```bash
+VITE_WECHAT_APP_ID=wx_xxx
+VITE_WECHAT_REDIRECT_URI=https://your-domain.example/
+VITE_WECHAT_LOGIN_API=https://your-api.example/auth/wechat
+```
+
+`VITE_WECHAT_LOGIN_API` 接收前端提交的 `{ code, state }`，在后端使用微信 `AppSecret` 换取用户信息，并返回：
+
+```json
+{
+  "id": "wechat-openid-or-unionid",
+  "provider": "wechat",
+  "displayName": "用户昵称",
+  "avatarUrl": "https://example.com/avatar.png"
+}
+```
+
 ## 验证
 
 ```bash
