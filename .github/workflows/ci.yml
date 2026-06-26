@@ -28,6 +28,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install browser for smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run smoke
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

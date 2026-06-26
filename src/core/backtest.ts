@@ -37,14 +37,28 @@ interface PendingRebalance {
   rankings: EvaluationRow[];
 }
 
+export interface CloseLookup {
+  getClose: (symbol: string, date: string) => number | null;
+}
+
 function uniqueSortedDates(bars: MarketBar[]): string[] {
   return [...new Set(bars.map((bar) => bar.date))].sort();
 }
 
-function getClose(barsBySymbol: Map<string, MarketBar[]>, symbol: string, date: string): number | null {
-  const bars = barsBySymbol.get(symbol);
-  const bar = bars?.find((item) => item.date === date);
-  return bar?.close ?? null;
+export function createCloseLookup(bars: MarketBar[]): CloseLookup {
+  const closesBySymbol = new Map<string, Map<string, number>>();
+
+  for (const bar of bars) {
+    const closesByDate = closesBySymbol.get(bar.symbol) ?? new Map<string, number>();
+    closesByDate.set(bar.date, bar.close);
+    closesBySymbol.set(bar.symbol, closesByDate);
+  }
+
+  return {
+    getClose(symbol: string, date: string): number | null {
+      return closesBySymbol.get(symbol)?.get(date) ?? null;
+    }
+  };
 }
 
 function defaultExecution(config: StrategyConfig): ExecutionConfig {
@@ -55,7 +69,7 @@ function defaultExecution(config: StrategyConfig): ExecutionConfig {
 }
 
 function dailyPortfolioReturn(
-  barsBySymbol: Map<string, MarketBar[]>,
+  closeLookup: CloseLookup,
   previousDate: string,
   currentDate: string,
   holdings: Holding[],
@@ -71,8 +85,8 @@ function dailyPortfolioReturn(
   const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
   const cashWeight = Math.max(0, 1 - investedWeight);
   const dailyReturn = holdings.reduce((total, holding) => {
-    const previous = getClose(barsBySymbol, holding.symbol, previousDate);
-    const current = getClose(barsBySymbol, holding.symbol, currentDate);
+    const previous = closeLookup.getClose(holding.symbol, previousDate);
+    const current = closeLookup.getClose(holding.symbol, currentDate);
     if (!previous || !current) {
       warnings.push(
         `${currentDate} ${holding.symbol} 缺少行情，按现金收益处理。`
@@ -296,6 +310,7 @@ function calculateMetrics(
 
 function buildBenchmark(
   barsBySymbol: Map<string, MarketBar[]>,
+  closeLookup: CloseLookup,
   profiles: EtfProfile[],
   universe: string[],
   dates: string[],
@@ -319,7 +334,7 @@ function buildBenchmark(
       index === startIndex
         ? 0
         : dailyPortfolioReturn(
-            barsBySymbol,
+            closeLookup,
             dates[index - 1],
             date,
             holdings,
@@ -371,11 +386,13 @@ function warningsFrom(...collections: string[][]): string[] {
 
 function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig }): BacktestResult {
   const barsBySymbol = groupBarsBySymbol(input.bars);
+  const closeLookup = createCloseLookup(input.bars);
   const dates = uniqueSortedDates(input.bars);
   const startIndex = Math.min(warmupLength(input.config), Math.max(0, dates.length - 2));
   const execution = defaultExecution(input.config);
   const benchmark = buildBenchmark(
     barsBySymbol,
+    closeLookup,
     input.profiles,
     input.config.universe,
     dates,
@@ -397,7 +414,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       curve.push({ date, equity, dailyReturn: 0, drawdown: 0 });
     } else {
       const dailyResult = dailyPortfolioReturn(
-        barsBySymbol,
+        closeLookup,
         dates[index - 1],
         date,
         holdings,
@@ -548,6 +565,33 @@ function aggregateHoldings(
     .sort((left, right) => right.weight - left.weight);
 }
 
+function compositeRebalances(
+  childResults: Array<{ weight: number; result: BacktestResult }>,
+  costBps: number,
+  slippageBps: number
+): RebalanceEvent[] {
+  const turnoverByDate = new Map<string, number>();
+
+  for (const child of childResults) {
+    for (const event of child.result.rebalances) {
+      const current = turnoverByDate.get(event.date) ?? 0;
+      turnoverByDate.set(event.date, current + child.weight * event.turnover);
+    }
+  }
+
+  return [...turnoverByDate.entries()]
+    .filter(([, turnover]) => turnover > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, turnover]) => ({
+      date,
+      holdings: [],
+      rankings: [],
+      turnover,
+      costBps,
+      slippageBps
+    }));
+}
+
 function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrategyConfig }): BacktestResult {
   const components = normalizeComponents(input.config, input.strategyBook ?? []);
   const warnings: string[] = [];
@@ -580,6 +624,13 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
     );
     return { weight: component.normalizedWeight, strategy: component.strategy, result };
   });
+  const execution = defaultExecution(input.config);
+  const rebalances = compositeRebalances(
+    childResults,
+    input.config.transactionCostBps,
+    execution.slippageBps
+  );
+  const rebalanceByDate = new Map(rebalances.map((event) => [event.date, event]));
 
   const commonDates = childResults
     .map((child) => new Set(child.result.equityCurve.map((point) => point.date)))
@@ -600,7 +651,7 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
 
   for (let index = 0; index < commonDates.length; index += 1) {
     const date = commonDates[index];
-    const dailyReturn =
+    const childDailyReturn =
       index === 0
         ? 0
         : childCurveByDate.reduce(
@@ -608,6 +659,11 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
               total + child.weight * (child.curveByDate.get(date)?.dailyReturn ?? 0),
             0
           );
+    const costEvent = rebalanceByDate.get(date);
+    const costRate = costEvent
+      ? (costEvent.turnover * (input.config.transactionCostBps + execution.slippageBps)) / 10_000
+      : 0;
+    const dailyReturn = (1 + childDailyReturn) * (1 - costRate) - 1;
 
     equity *= 1 + dailyReturn;
     peak = Math.max(peak, equity);
@@ -632,8 +688,8 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
 
   return {
     equityCurve,
-    rebalances: [],
-    metrics: calculateMetrics(equityCurve, []),
+    rebalances,
+    metrics: calculateMetrics(equityCurve, rebalances),
     latestSignal: {
       date: equityCurve.at(-1)?.date ?? "",
       holdings: latestHoldings,

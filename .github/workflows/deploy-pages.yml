@@ -43,6 +43,14 @@ jobs:
         env:
           VITE_BASE_PATH: /etf-platform/
 
+      - name: Install browser for smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run smoke
+        env:
+          SMOKE_PATH: /etf-platform/
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3

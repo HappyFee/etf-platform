@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { runBacktest } from "./backtest";
+import { createCloseLookup, runBacktest } from "./backtest";
 import { defaultCompositeStrategy, defaultStrategy, defensiveStrategy } from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
 
@@ -119,6 +119,45 @@ describe("backtest engine", () => {
     expect(firstRebalance.costBps).toBe(1000);
     expect(firstRebalance.slippageBps).toBeGreaterThan(0);
     expect(curvePoint.dailyReturn).toBeLessThan(0);
+  });
+
+  test("applies configured transaction costs to composite strategies", () => {
+    const baseComposite = {
+      ...defaultCompositeStrategy,
+      transactionCostBps: 0,
+      execution: { price: "next_close" as const, slippageBps: 0 }
+    };
+    const costlyComposite = {
+      ...baseComposite,
+      transactionCostBps: 1000
+    };
+    const strategyBook = [defaultStrategy, defensiveStrategy, baseComposite];
+
+    const noCostResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: baseComposite,
+      strategyBook
+    });
+    const costlyResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: costlyComposite,
+      strategyBook: [defaultStrategy, defensiveStrategy, costlyComposite]
+    });
+
+    expect(costlyResult.rebalances.length).toBeGreaterThan(0);
+    expect(costlyResult.rebalances.some((event) => event.costBps === 1000)).toBe(true);
+    expect(costlyResult.metrics.totalReturn).toBeLessThan(noCostResult.metrics.totalReturn);
+  });
+
+  test("builds a close-price lookup keyed by symbol and date", () => {
+    const lookup = createCloseLookup(marketBars);
+    const firstBar = marketBars[0];
+
+    expect(lookup.getClose(firstBar.symbol, firstBar.date)).toBe(firstBar.close);
+    expect(lookup.getClose(firstBar.symbol, "1900-01-01")).toBeNull();
+    expect(lookup.getClose("missing", firstBar.date)).toBeNull();
   });
 
   test("allocates fixed rank weights to selected ETFs", () => {

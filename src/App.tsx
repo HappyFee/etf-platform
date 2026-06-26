@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   BellRing,
   Database,
@@ -20,6 +21,7 @@ import { loadGeneratedDataset, sampleDataset } from "./core/dataSource";
 import type { BaseStrategyConfig, CompositeStrategyConfig, StrategyConfig } from "./core/types";
 
 type TabKey = "overview" | "lab" | "factors" | "signals";
+type DataLoadStatus = "loading" | "loaded" | "failed";
 
 const tabs: Array<{
   key: TabKey;
@@ -40,6 +42,27 @@ function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+export function DataSourceNotice({
+  generatedUrl,
+  loadStatus
+}: {
+  generatedUrl: string;
+  loadStatus: DataLoadStatus;
+}) {
+  if (loadStatus !== "failed") {
+    return null;
+  }
+
+  return (
+    <div className="data-source-notice" data-testid="data-source-notice" role="status">
+      <AlertTriangle size={16} />
+      <span>
+        真实行情数据加载失败，当前使用演示数据。请检查生成文件是否可访问：{generatedUrl}
+      </span>
+    </div>
+  );
+}
+
 export function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [strategies, setStrategies] = useState<StrategyConfig[]>(
@@ -47,20 +70,29 @@ export function App() {
   );
   const [activeStrategyId, setActiveStrategyId] = useState(defaultStrategy.id);
   const [dataset, setDataset] = useState(sampleDataset);
+  const [dataLoadStatus, setDataLoadStatus] = useState<DataLoadStatus>("loading");
+  const generatedUrl = `${import.meta.env.BASE_URL}data/a-share-etf-bars.generated.json`;
 
   useEffect(() => {
     let cancelled = false;
 
-    loadGeneratedDataset(fetch, `${import.meta.env.BASE_URL}data/a-share-etf-bars.generated.json`).then((generatedDataset) => {
-      if (!cancelled && generatedDataset) {
+    loadGeneratedDataset(fetch, generatedUrl).then((generatedDataset) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (generatedDataset) {
         setDataset(generatedDataset);
+        setDataLoadStatus("loaded");
+      } else {
+        setDataLoadStatus("failed");
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [generatedUrl]);
 
   const config = useMemo(
     () => strategies.find((strategy) => strategy.id === activeStrategyId) ?? strategies[0],
@@ -182,6 +214,8 @@ export function App() {
           </div>
         </div>
       </header>
+
+      <DataSourceNotice generatedUrl={generatedUrl} loadStatus={dataLoadStatus} />
 
       <nav className="tab-bar" aria-label="平台导航">
         {tabs.map((tab) => {

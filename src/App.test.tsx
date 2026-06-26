@@ -1,6 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import { App } from "./App";
+import { App, DataSourceNotice } from "./App";
 import { StrategyLab } from "./components/StrategyLab";
 import { runBacktest } from "./core/backtest";
 import { defaultStrategies, defaultStrategy } from "./core/defaultStrategy";
@@ -67,5 +67,17 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"add-filter-button\"");
     expect(html).toContain("data-testid=\"max-position-input\"");
     expect(html).toContain("data-testid=\"min-cash-input\"");
+  });
+
+  test("renders a visible notice when generated data fails to load", () => {
+    const html = renderToString(
+      <DataSourceNotice
+        generatedUrl="/data/a-share-etf-bars.generated.json"
+        loadStatus="failed"
+      />
+    );
+
+    expect(html).toContain("data-testid=\"data-source-notice\"");
+    expect(html).toContain("/data/a-share-etf-bars.generated.json");
   });
 });

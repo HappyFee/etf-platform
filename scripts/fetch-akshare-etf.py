@@ -443,7 +443,10 @@ def main() -> None:
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    output.write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
     print(
         f"wrote {len(bars)} bars for {len(succeeded_symbols)}/{len(args.symbols)} "
         f"symbols through {latest_date} to {output}"
