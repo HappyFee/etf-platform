@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import handler from "./wechat";
+import handler from "../api/auth/wechat";
 
 function createResponse() {
   const headers = new Map<string, string>();

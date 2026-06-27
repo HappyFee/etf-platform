@@ -1,7 +1,7 @@
 import {
   exchangeWeChatCodeForAccount,
   missingWeChatServerConfig
-} from "../../src/core/wechatServerAuth";
+} from "../../src/core/wechatServerAuth.js";
 
 interface VercelRequest {
   method?: string;
