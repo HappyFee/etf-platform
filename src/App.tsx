@@ -46,6 +46,7 @@ const localAccount: AccountProfile = {
   provider: "local",
   displayName: "本地账号"
 };
+const weChatStateKey = "etf-platform:wechat-oauth-state";
 
 const tabs: Array<{
   key: TabKey;
@@ -211,6 +212,12 @@ export function App() {
       return;
     }
 
+    const expectedState = window.sessionStorage.getItem(weChatStateKey);
+    if (!expectedState || expectedState !== state) {
+      setAccountNotice("微信登录 state 校验失败，请重新发起登录。");
+      return;
+    }
+
     if (!weChatConfig.loginApi) {
       setAccountNotice("微信已返回授权 code，但未配置 VITE_WECHAT_LOGIN_API，无法安全完成登录。");
       return;
@@ -223,6 +230,7 @@ export function App() {
           return;
         }
         switchAccount(nextAccount);
+        window.sessionStorage.removeItem(weChatStateKey);
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete("code");
         cleanUrl.searchParams.delete("state");
@@ -331,6 +339,7 @@ export function App() {
   function loginWithWeChat() {
     if (weChatConfig.mode === "oauth") {
       const state = createWeChatState();
+      window.sessionStorage.setItem(weChatStateKey, state);
       const url = buildWeChatAuthorizeUrl({
         appId: weChatConfig.appId,
         redirectUri: weChatConfig.redirectUri,

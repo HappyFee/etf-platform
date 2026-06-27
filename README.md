@@ -49,6 +49,43 @@ npm run dev
 
 Open the URL printed by Vite.
 
+## Accounts And WeChat Login
+
+The app stores each account's strategy workspace separately in browser `localStorage`. Different accounts keep independent strategy lists and active strategy selections. The default account is a local account.
+
+WeChat login has two modes:
+
+- Without WeChat environment variables, the UI uses local mock WeChat accounts for personal offline use and development.
+- With `VITE_WECHAT_APP_ID`, the UI redirects to the WeChat Open Platform website QR authorization flow.
+
+Real WeChat login must keep `AppSecret` on the server. This project includes a Vercel Serverless Function:
+
+```text
+/api/auth/wechat
+```
+
+For Vercel deployments, configure:
+
+```bash
+VITE_WECHAT_APP_ID=wx_xxx
+VITE_WECHAT_REDIRECT_URI=https://your-domain.example/
+WECHAT_APP_ID=wx_xxx
+WECHAT_APP_SECRET=your_wechat_app_secret
+```
+
+The frontend posts the callback `{ code, state }` to `/api/auth/wechat` by default. The serverless function exchanges the code for `access_token` and user profile data, then returns:
+
+```json
+{
+  "id": "wechat-openid-or-unionid",
+  "provider": "wechat",
+  "displayName": "User nickname",
+  "avatarUrl": "https://example.com/avatar.png"
+}
+```
+
+Pure static platforms such as GitHub Pages cannot run the serverless API, so real WeChat login is unavailable there. Use Vercel or another host with a backend function.
+
 ## Verification
 
 ```bash

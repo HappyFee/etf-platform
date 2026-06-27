@@ -28,9 +28,9 @@ describe("wechat auth adapter", () => {
 
   test("uses mock login when app id is not configured", () => {
     expect(resolveWeChatLoginConfig({}).mode).toBe("mock");
-    expect(resolveWeChatLoginConfig({ VITE_WECHAT_APP_ID: "wx123" }).mode).toBe(
-      "oauth"
-    );
+    const config = resolveWeChatLoginConfig({ VITE_WECHAT_APP_ID: "wx123" });
+    expect(config.mode).toBe("oauth");
+    expect(config.mode === "oauth" ? config.loginApi : "").toBe("/api/auth/wechat");
   });
 
   test("creates stable local mock accounts by label", () => {

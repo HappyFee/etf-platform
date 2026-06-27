@@ -45,7 +45,7 @@ export function resolveWeChatLoginConfig(env: WeChatEnv): WeChatLoginConfig {
     redirectUri:
       env.VITE_WECHAT_REDIRECT_URI ??
       (typeof window === "undefined" ? "/" : window.location.href),
-    loginApi: env.VITE_WECHAT_LOGIN_API
+    loginApi: env.VITE_WECHAT_LOGIN_API ?? "/api/auth/wechat"
   };
 }
 

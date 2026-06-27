@@ -58,15 +58,22 @@ npm run dev
 - 未配置环境变量时，界面使用本地微信模拟登录，适合个人离线使用和开发测试。
 - 配置 `VITE_WECHAT_APP_ID` 后，点击微信登录会跳转到微信开放平台扫码授权页。
 
-真实微信登录不能在前端保存或使用 `AppSecret`。如果要完成真实账号换取，需要提供后端接口，并配置：
+真实微信登录不能在前端保存或使用 `AppSecret`。项目已内置 Vercel Serverless Function：
+
+```text
+/api/auth/wechat
+```
+
+部署到 Vercel 时配置：
 
 ```bash
 VITE_WECHAT_APP_ID=wx_xxx
 VITE_WECHAT_REDIRECT_URI=https://your-domain.example/
-VITE_WECHAT_LOGIN_API=https://your-api.example/auth/wechat
+WECHAT_APP_ID=wx_xxx
+WECHAT_APP_SECRET=your_wechat_app_secret
 ```
 
-`VITE_WECHAT_LOGIN_API` 接收前端提交的 `{ code, state }`，在后端使用微信 `AppSecret` 换取用户信息，并返回：
+默认情况下，前端会把微信回调拿到的 `{ code, state }` 提交到 `/api/auth/wechat`。该接口在服务端使用 `WECHAT_APP_SECRET` 向微信换取 `access_token` 和用户资料，并返回：
 
 ```json
 {
@@ -76,6 +83,8 @@ VITE_WECHAT_LOGIN_API=https://your-api.example/auth/wechat
   "avatarUrl": "https://example.com/avatar.png"
 }
 ```
+
+如果部署在 GitHub Pages 这类纯静态平台，没有后端函数，真实微信登录不可用，只能使用本地微信模拟登录。
 
 ## 验证
 
