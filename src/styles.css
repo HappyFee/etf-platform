@@ -197,6 +197,39 @@ table {
   min-width: 0;
 }
 
+.account-panel__auth {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-panel__email {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.account-panel__email input {
+  min-height: 38px;
+  border: 0;
+  padding: 0;
+  color: #fff;
+  background: transparent;
+}
+
+.account-panel__email input::placeholder {
+  color: rgba(255, 255, 255, 0.64);
+}
+
 .account-panel__identity span:last-child {
   display: grid;
   min-width: 0;
@@ -225,6 +258,11 @@ table {
   color: #0f2f2b;
   background: #dff5ef;
   font-weight: 900;
+}
+
+.account-panel__identity .account-avatar + .account-avatar,
+.account-panel__identity small + small {
+  display: none;
 }
 
 .account-panel .text-action,
@@ -962,6 +1000,10 @@ input[type="checkbox"] {
 
   .account-panel__actions {
     flex-wrap: wrap;
+  }
+
+  .account-panel__auth {
+    grid-template-columns: 1fr;
   }
 
   .workspace {

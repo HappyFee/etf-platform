@@ -100,4 +100,28 @@ describe("App", () => {
     expect(html).toContain("微信用户 demo");
     expect(html).toContain("微信登录");
   });
+  test("renders Supabase email login controls when configured", () => {
+    const html = renderToString(
+      <AccountPanel
+        account={{
+          id: "local-default",
+          provider: "local",
+          displayName: "本地账号"
+        }}
+        isOAuthConfigured={false}
+        isSupabaseConfigured={true}
+        onLocalLogin={() => undefined}
+        onLogout={() => undefined}
+        onSupabaseEmailChange={() => undefined}
+        onSupabaseLogin={() => undefined}
+        onWeChatLogin={() => undefined}
+        supabaseEmail="owner@example.com"
+        supabaseStatus="idle"
+      />
+    );
+
+    expect(html).toContain("data-testid=\"supabase-email-input\"");
+    expect(html).toContain("data-testid=\"supabase-login-button\"");
+    expect(html).toContain("owner@example.com");
+  });
 });

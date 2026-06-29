@@ -6,7 +6,7 @@ const activeAccountKey = "etf-platform:active-account";
 
 export interface AccountProfile {
   id: string;
-  provider: "wechat" | "local";
+  provider: "wechat" | "local" | "supabase";
   displayName: string;
   avatarUrl?: string;
 }
@@ -115,7 +115,9 @@ export function loadActiveAccount(storage: StorageLike): AccountProfile | null {
     if (
       typeof parsed.id !== "string" ||
       typeof parsed.displayName !== "string" ||
-      (parsed.provider !== "wechat" && parsed.provider !== "local")
+      (parsed.provider !== "wechat" &&
+        parsed.provider !== "local" &&
+        parsed.provider !== "supabase")
     ) {
       return null;
     }

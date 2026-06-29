@@ -7,6 +7,7 @@ import {
   Layers3,
   LibraryBig,
   LogOut,
+  Mail,
   MessageCircle,
   SlidersHorizontal
 } from "lucide-react";
@@ -36,10 +37,21 @@ import {
   exchangeWeChatCode,
   resolveWeChatLoginConfig
 } from "./core/wechatAuth";
+import {
+  accountFromSupabaseUser,
+  createSupabaseBrowserClient,
+  loadSupabaseWorkspace,
+  resolveSupabaseConfig,
+  saveSupabaseWorkspace,
+  type SupabaseUserLike,
+  type SupabaseWorkspaceLoadClient,
+  type SupabaseWorkspaceSaveClient
+} from "./core/supabaseAuth";
 import type { BaseStrategyConfig, CompositeStrategyConfig, StrategyConfig } from "./core/types";
 
 type TabKey = "overview" | "lab" | "factors" | "signals";
 type DataLoadStatus = "loading" | "loaded" | "failed";
+type SupabaseStatus = "idle" | "sending" | "sent" | "syncing";
 
 const localAccount: AccountProfile = {
   id: "local-default",
@@ -111,24 +123,56 @@ export function DataSourceNotice({
 export function AccountPanel({
   account,
   isOAuthConfigured,
+  isSupabaseConfigured = false,
   onWeChatLogin,
   onLocalLogin,
-  onLogout
+  onLogout,
+  onSupabaseEmailChange = () => undefined,
+  onSupabaseLogin = () => undefined,
+  supabaseEmail = "",
+  supabaseStatus = "idle"
 }: {
   account: AccountProfile;
   isOAuthConfigured: boolean;
+  isSupabaseConfigured?: boolean;
   onWeChatLogin: () => void;
   onLocalLogin: () => void;
   onLogout: () => void;
+  onSupabaseEmailChange?: (email: string) => void;
+  onSupabaseLogin?: () => void;
+  supabaseEmail?: string;
+  supabaseStatus?: SupabaseStatus;
 }) {
+  const providerLabel =
+    account.provider === "supabase"
+      ? "Supabase 云端账号"
+      : account.provider === "wechat"
+        ? isOAuthConfigured
+          ? "微信账号"
+          : "微信模拟账号"
+        : "本地账号";
+  const avatarLabel =
+    account.provider === "supabase" ? "云" : account.provider === "wechat" ? "微" : "本";
+  const supabaseBusy = supabaseStatus === "sending" || supabaseStatus === "syncing";
+  const supabaseButtonLabel =
+    supabaseStatus === "sending"
+      ? "发送中"
+      : supabaseStatus === "sent"
+        ? "已发送"
+        : supabaseStatus === "syncing"
+          ? "同步中"
+          : "邮箱登录";
+
   return (
     <div className="account-panel" data-testid="account-panel">
       <div className="account-panel__identity">
+        <span className="account-avatar">{avatarLabel}</span>
         <span className="account-avatar">
           {account.provider === "wechat" ? "微" : "本"}
         </span>
         <span>
           <strong>{account.displayName}</strong>
+          <small>{providerLabel}</small>
           <small>
             {account.provider === "wechat"
               ? isOAuthConfigured
@@ -150,6 +194,33 @@ export function AccountPanel({
           <LogOut size={16} />
         </button>
       </div>
+      <form
+        className="account-panel__auth"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSupabaseLogin();
+        }}
+      >
+        <label className="account-panel__email">
+          <Mail size={15} />
+          <input
+            data-testid="supabase-email-input"
+            disabled={!isSupabaseConfigured || supabaseBusy}
+            onChange={(event) => onSupabaseEmailChange(event.target.value)}
+            placeholder={isSupabaseConfigured ? "输入邮箱获取登录链接" : "未配置 Supabase"}
+            type="email"
+            value={supabaseEmail}
+          />
+        </label>
+        <button
+          className="text-action"
+          data-testid="supabase-login-button"
+          disabled={!isSupabaseConfigured || supabaseBusy}
+          type="submit"
+        >
+          {supabaseButtonLabel}
+        </button>
+      </form>
     </div>
   );
 }
@@ -166,6 +237,10 @@ export function App() {
   const [dataset, setDataset] = useState(sampleDataset);
   const [dataLoadStatus, setDataLoadStatus] = useState<DataLoadStatus>("loading");
   const [accountNotice, setAccountNotice] = useState<string | null>(null);
+  const [supabaseEmail, setSupabaseEmail] = useState("");
+  const [supabaseStatus, setSupabaseStatus] = useState<SupabaseStatus>("idle");
+  const [supabaseUserId, setSupabaseUserId] = useState<string | null>(null);
+  const [cloudWorkspaceUserId, setCloudWorkspaceUserId] = useState<string | null>(null);
   const generatedUrl = `${import.meta.env.BASE_URL}data/a-share-etf-bars.generated.json`;
   const weChatConfig = useMemo(
     () =>
@@ -177,6 +252,22 @@ export function App() {
     []
   );
   const isWeChatOAuthConfigured = weChatConfig.mode === "oauth";
+  const supabaseConfig = useMemo(
+    () =>
+      resolveSupabaseConfig({
+        VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+        VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+      }),
+    []
+  );
+  const supabase = useMemo(
+    () =>
+      supabaseConfig.mode === "enabled"
+        ? createSupabaseBrowserClient(supabaseConfig)
+        : null,
+    [supabaseConfig]
+  );
+  const isSupabaseConfigured = supabaseConfig.mode === "enabled";
 
   useEffect(() => {
     let cancelled = false;
@@ -198,6 +289,62 @@ export function App() {
       cancelled = true;
     };
   }, [generatedUrl]);
+
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
+    let cancelled = false;
+    setSupabaseStatus("syncing");
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (error) {
+          setSupabaseStatus("idle");
+          setAccountNotice(error.message);
+          return;
+        }
+
+        if (data.session?.user) {
+          void activateSupabaseUser(data.session.user);
+        } else {
+          setSupabaseStatus("idle");
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setSupabaseStatus("idle");
+        setAccountNotice(error instanceof Error ? error.message : "Supabase session 初始化失败");
+      });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        void activateSupabaseUser(session.user);
+        return;
+      }
+
+      if (event === "SIGNED_OUT") {
+        setSupabaseUserId(null);
+        setCloudWorkspaceUserId(null);
+        setSupabaseStatus("idle");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (typeof window === "undefined" || weChatConfig.mode !== "oauth") {
@@ -260,6 +407,32 @@ export function App() {
     });
   }, [account, activeStrategyId, storage, strategies]);
 
+  useEffect(() => {
+    if (
+      !supabase ||
+      account.provider !== "supabase" ||
+      !supabaseUserId ||
+      cloudWorkspaceUserId !== supabaseUserId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    saveSupabaseWorkspace(supabase as unknown as SupabaseWorkspaceSaveClient, supabaseUserId, {
+      strategies,
+      activeStrategyId
+    }).catch((error: unknown) => {
+      if (cancelled) {
+        return;
+      }
+      setAccountNotice(error instanceof Error ? error.message : "Supabase 策略保存失败");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [account.provider, activeStrategyId, cloudWorkspaceUserId, strategies, supabase, supabaseUserId]);
+
   const config = useMemo(
     () => strategies.find((strategy) => strategy.id === activeStrategyId) ?? strategies[0],
     [activeStrategyId, strategies]
@@ -296,6 +469,48 @@ export function App() {
       ? `${dataset.succeededSymbols.length}/${dataset.requestedSymbols.length}`
       : `${dataset.profiles.length}`;
 
+  async function activateSupabaseUser(user: SupabaseUserLike) {
+    if (!supabase) {
+      return;
+    }
+
+    const nextAccount = accountFromSupabaseUser(user);
+    setSupabaseStatus("syncing");
+    setSupabaseUserId(user.id);
+    setCloudWorkspaceUserId(null);
+    if (user.email) {
+      setSupabaseEmail(user.email);
+    }
+
+    let nextWorkspace = storage
+      ? loadAccountWorkspace(storage, nextAccount.id)
+      : initialWorkspace(storage, nextAccount);
+
+    try {
+      const cloudWorkspace = await loadSupabaseWorkspace(
+        supabase as unknown as SupabaseWorkspaceLoadClient,
+        user.id
+      );
+      if (cloudWorkspace) {
+        nextWorkspace = cloudWorkspace;
+      }
+    } catch (error) {
+      setAccountNotice(error instanceof Error ? error.message : "Supabase 策略加载失败");
+    }
+
+    setAccount(nextAccount);
+    setStrategies(nextWorkspace.strategies);
+    setActiveStrategyId(nextWorkspace.activeStrategyId);
+    setActiveTab("lab");
+    setCloudWorkspaceUserId(user.id);
+    setSupabaseStatus("idle");
+
+    if (storage) {
+      saveActiveAccount(storage, nextAccount);
+      saveAccountWorkspace(storage, nextAccount.id, nextWorkspace);
+    }
+  }
+
   function persistCurrentWorkspace() {
     if (!storage) {
       return;
@@ -324,7 +539,49 @@ export function App() {
     }
   }
 
+  async function signOutSupabaseSession() {
+    if (supabase && supabaseUserId) {
+      await supabase.auth.signOut();
+    }
+    setSupabaseUserId(null);
+    setCloudWorkspaceUserId(null);
+    setSupabaseStatus("idle");
+  }
+
+  async function loginWithSupabaseEmail() {
+    if (!supabase) {
+      setAccountNotice("Supabase 尚未配置，无法发送登录链接。");
+      return;
+    }
+
+    const email = supabaseEmail.trim();
+    if (!email) {
+      setAccountNotice("请输入邮箱地址。");
+      return;
+    }
+
+    setSupabaseStatus("sending");
+    const redirectTo =
+      typeof window === "undefined"
+        ? undefined
+        : `${window.location.origin}${window.location.pathname}`;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: redirectTo ? { emailRedirectTo: redirectTo } : undefined
+    });
+
+    if (error) {
+      setSupabaseStatus("idle");
+      setAccountNotice(error.message);
+      return;
+    }
+
+    setSupabaseStatus("sent");
+    setAccountNotice("登录链接已发送，请到邮箱中打开。");
+  }
+
   function loginWithLocalAccount() {
+    void signOutSupabaseSession();
     switchAccount(localAccount);
   }
 
@@ -333,6 +590,7 @@ export function App() {
     if (storage) {
       clearActiveAccount(storage);
     }
+    void signOutSupabaseSession();
     switchAccount(localAccount);
   }
 
@@ -442,9 +700,14 @@ export function App() {
             <AccountPanel
               account={account}
               isOAuthConfigured={isWeChatOAuthConfigured}
+              isSupabaseConfigured={isSupabaseConfigured}
               onLocalLogin={loginWithLocalAccount}
               onLogout={logoutAccount}
+              onSupabaseEmailChange={setSupabaseEmail}
+              onSupabaseLogin={() => void loginWithSupabaseEmail()}
               onWeChatLogin={loginWithWeChat}
+              supabaseEmail={supabaseEmail}
+              supabaseStatus={supabaseStatus}
             />
           </div>
         </div>
