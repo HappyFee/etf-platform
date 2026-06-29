@@ -550,6 +550,37 @@ function BaseStrategyEditor({
             />
             <small>{((liquidityFilter?.value ?? 0) / 100_000_000).toFixed(1)} 亿</small>
           </label>
+          <label>
+            空仓替代
+            <select
+              data-testid="cash-replacement-select"
+              value={config.risk.cashReplacementSymbol ?? ""}
+              onChange={(event) =>
+                onChange({
+                  ...config,
+                  risk: {
+                    ...config.risk,
+                    cashReplacementSymbol: event.target.value || undefined
+                  }
+                })
+              }
+            >
+              <option value="">保持现金</option>
+              {profiles.map((profile) => (
+                <option key={profile.symbol} value={profile.symbol}>
+                  {profile.symbol} · {profile.name}
+                </option>
+              ))}
+              {config.risk.cashReplacementSymbol &&
+                !profiles.some(
+                  (profile) => profile.symbol === config.risk.cashReplacementSymbol
+                ) && (
+                  <option value={config.risk.cashReplacementSymbol}>
+                    {config.risk.cashReplacementSymbol}
+                  </option>
+                )}
+            </select>
+          </label>
         </div>
         {config.portfolio.weighting === "fixed" && (
           <div className="fixed-weight-list">

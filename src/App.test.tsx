@@ -67,6 +67,7 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"add-filter-button\"");
     expect(html).toContain("data-testid=\"max-position-input\"");
     expect(html).toContain("data-testid=\"min-cash-input\"");
+    expect(html).toContain("data-testid=\"cash-replacement-select\"");
   });
 
   test("renders a visible notice when generated data fails to load", () => {

@@ -71,6 +71,7 @@ export interface RiskConfig {
   cashReturnAnnual: number;
   maxPositionWeight?: number;
   minCashWeight?: number;
+  cashReplacementSymbol?: string;
 }
 
 export interface ExecutionConfig {

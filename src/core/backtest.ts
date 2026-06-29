@@ -107,10 +107,15 @@ function isBaseStrategy(config: StrategyConfig): config is BaseStrategyConfig {
   return config.kind !== "composite";
 }
 
-function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Holding[] {
+function holdingsFromRows(
+  rows: EvaluationRow[],
+  config: BaseStrategyConfig,
+  profiles: EtfProfile[]
+): Holding[] {
   const selected = rows.slice(0, Math.max(0, config.portfolio.topN));
+  const profileBySymbol = new Map(profiles.map((profile) => [profile.symbol, profile]));
   if (selected.length === 0) {
-    return [];
+    return applyCashReplacement([], config, profileBySymbol);
   }
 
   let holdings: Holding[];
@@ -126,7 +131,7 @@ function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Ho
         name: row.name,
         weight: rawWeights[index] / totalWeight
       }));
-      return applyRiskConstraints(holdings, config);
+      return applyCashReplacement(applyRiskConstraints(holdings, config), config, profileBySymbol);
     }
   }
 
@@ -138,7 +143,7 @@ function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Ho
         name: row.name,
         weight: Math.max(0, row.score) / scoreTotal
       }));
-      return applyRiskConstraints(holdings, config);
+      return applyCashReplacement(applyRiskConstraints(holdings, config), config, profileBySymbol);
     }
   }
 
@@ -147,7 +152,42 @@ function holdingsFromRows(rows: EvaluationRow[], config: BaseStrategyConfig): Ho
     name: row.name,
     weight: 1 / selected.length
   }));
-  return applyRiskConstraints(holdings, config);
+  return applyCashReplacement(applyRiskConstraints(holdings, config), config, profileBySymbol);
+}
+
+function applyCashReplacement(
+  holdings: Holding[],
+  config: BaseStrategyConfig,
+  profileBySymbol: Map<string, EtfProfile>
+): Holding[] {
+  const replacementSymbol = config.risk.cashReplacementSymbol?.trim();
+  if (!replacementSymbol) {
+    return holdings;
+  }
+
+  const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
+  const idleWeight = Math.max(0, 1 - investedWeight);
+  if (idleWeight <= 0.0001) {
+    return holdings;
+  }
+
+  const existing = holdings.find((holding) => holding.symbol === replacementSymbol);
+  if (existing) {
+    return holdings.map((holding) =>
+      holding.symbol === replacementSymbol
+        ? { ...holding, weight: holding.weight + idleWeight }
+        : holding
+    );
+  }
+
+  return [
+    ...holdings,
+    {
+      symbol: replacementSymbol,
+      name: profileBySymbol.get(replacementSymbol)?.name ?? replacementSymbol,
+      weight: idleWeight
+    }
+  ];
 }
 
 function applyRiskConstraints(
@@ -471,7 +511,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       });
       warnings.push(...evaluation.warnings);
 
-      const nextHoldings = holdingsFromRows(evaluation.rows, input.config);
+      const nextHoldings = holdingsFromRows(evaluation.rows, input.config, input.profiles);
       const tradeDate = dates[index + 1];
       if (tradeDate) {
         pendingRebalance = {
@@ -498,7 +538,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   const latestRebalance = rebalances.at(-1);
   const latestHoldings =
     latestEvaluation.rows.length > 0
-      ? holdingsFromRows(latestEvaluation.rows, input.config)
+      ? holdingsFromRows(latestEvaluation.rows, input.config, input.profiles)
       : latestRebalance?.holdings ?? holdings;
   const equityCurve = attachBenchmark(curve, benchmark);
 

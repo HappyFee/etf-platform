@@ -41,7 +41,13 @@ describe("backtest engine", () => {
     });
 
     expect(result.warnings.some((warning) => warning.includes("过滤"))).toBe(true);
-    expect(result.latestSignal.holdings).toEqual([]);
+    expect(result.latestSignal.holdings).toEqual([
+      {
+        symbol: "511880",
+        name: "银华日利ETF",
+        weight: 1
+      }
+    ]);
   });
 
   test("does not create holdings when every factor is disabled", () => {
@@ -57,8 +63,19 @@ describe("backtest engine", () => {
       }
     });
 
-    expect(result.latestSignal.holdings).toEqual([]);
-    expect(result.rebalances.every((event) => event.holdings.length === 0)).toBe(true);
+    expect(result.latestSignal.holdings).toEqual([
+      {
+        symbol: "511880",
+        name: "银华日利ETF",
+        weight: 1
+      }
+    ]);
+    expect(
+      result.rebalances.every(
+        (event) =>
+          event.holdings.length === 1 && event.holdings[0].symbol === "511880"
+      )
+    ).toBe(true);
     expect(result.warnings.some((warning) => warning.includes("因子"))).toBe(true);
   });
 
@@ -203,9 +220,58 @@ describe("backtest engine", () => {
     expect(result.latestSignal.holdings.every((holding) => holding.weight <= 0.4)).toBe(
       true
     );
+    expect(result.latestSignal.holdings.find((holding) => holding.symbol === "511880")?.weight)
+      .toBeCloseTo(0.1, 6);
     expect(
       result.latestSignal.holdings.reduce((total, holding) => total + holding.weight, 0)
-    ).toBeCloseTo(0.9, 6);
+    ).toBeCloseTo(1, 6);
+  });
+
+  test("allocates idle cash weight to a configured replacement ETF", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        risk: {
+          ...defaultStrategy.risk,
+          minCashWeight: 0.25,
+          cashReplacementSymbol: "511880"
+        }
+      }
+    });
+
+    const replacement = result.latestSignal.holdings.find(
+      (holding) => holding.symbol === "511880"
+    );
+
+    expect(replacement?.name).toBe("银华日利ETF");
+    expect(replacement?.weight).toBeCloseTo(0.25, 6);
+    expect(
+      result.latestSignal.holdings.reduce((total, holding) => total + holding.weight, 0)
+    ).toBeCloseTo(1, 6);
+  });
+
+  test("leaves idle cash uninvested when no replacement ETF is configured", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        risk: {
+          ...defaultStrategy.risk,
+          minCashWeight: 0.25,
+          cashReplacementSymbol: undefined
+        }
+      }
+    });
+
+    expect(
+      result.latestSignal.holdings.some((holding) => holding.symbol === "511880")
+    ).toBe(false);
+    expect(
+      result.latestSignal.holdings.reduce((total, holding) => total + holding.weight, 0)
+    ).toBeCloseTo(0.75, 6);
   });
 
   test("warns and accrues cash return when a held ETF is missing a daily bar", () => {

@@ -130,6 +130,18 @@ const seedProfiles: SeedProfile[] = [
     volatility: 0.002
   },
   {
+    symbol: "511880",
+    name: "银华日利ETF",
+    exchange: "SH",
+    category: "货币",
+    trackingIndex: "货币市场",
+    expenseRatio: 0.003,
+    basePrice: 100,
+    baseAmount: 1_400_000_000,
+    drift: 0.00006,
+    volatility: 0.0004
+  },
+  {
     symbol: "159928",
     name: "消费ETF",
     exchange: "SZ",

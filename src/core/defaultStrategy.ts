@@ -15,6 +15,8 @@ const defaultUniverse = [
   "159981"
 ];
 
+export const defaultCashReplacementSymbol = "511880";
+
 export const defaultStrategy: BaseStrategyConfig = {
   kind: "base",
   id: "balanced-etf-rotation",
@@ -83,7 +85,8 @@ export const defaultStrategy: BaseStrategyConfig = {
   },
   transactionCostBps: 6,
   risk: {
-    cashReturnAnnual: 0.015
+    cashReturnAnnual: 0.015,
+    cashReplacementSymbol: defaultCashReplacementSymbol
   }
 };
 

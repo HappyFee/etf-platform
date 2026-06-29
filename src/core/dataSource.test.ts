@@ -29,10 +29,30 @@ describe("market data source", () => {
 
     expect(dataset?.source).toBe("unit-test");
     expect(dataset?.latestDate).toBe("2026-05-29");
-    expect(dataset?.succeededSymbols).toEqual(["510300"]);
+    expect(dataset?.succeededSymbols).toEqual(["510300", "511880"]);
     expect(dataset?.failedSymbols).toEqual({ "159915": "provider timeout" });
-    expect(dataset?.profiles).toHaveLength(1);
-    expect(dataset?.bars).toHaveLength(3);
+    expect(dataset?.profiles).toHaveLength(2);
+    expect(dataset?.bars).toHaveLength(6);
+  });
+
+  test("supplements the default cash replacement ETF when generated data omits it", async () => {
+    const sourceBars = marketBars.filter((bar) => bar.symbol === "510300").slice(0, 2);
+
+    const dataset = await loadGeneratedDataset(async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          source: "unit-test",
+          generatedAt: "2026-05-28T00:00:00Z",
+          profiles: etfProfiles.filter((profile) => profile.symbol === "510300"),
+          bars: sourceBars
+        })
+      } as Response;
+    });
+
+    expect(dataset?.profiles.some((profile) => profile.symbol === "511880")).toBe(true);
+    expect(dataset?.bars.filter((bar) => bar.symbol === "511880")).toHaveLength(2);
+    expect(dataset?.bars.find((bar) => bar.symbol === "511880")?.close).toBeGreaterThan(0);
   });
 
   test("returns null when the generated JSON file is missing", async () => {

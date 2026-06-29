@@ -1,4 +1,5 @@
 import { etfProfiles, marketBars } from "./sampleData";
+import { defaultCashReplacementSymbol } from "./defaultStrategy";
 import type { EtfProfile, MarketBar } from "./types";
 
 export interface MarketDataset {
@@ -86,6 +87,86 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
   );
 }
 
+function uniqueSortedDates(bars: MarketBar[]): string[] {
+  return [...new Set(bars.map((bar) => bar.date))].sort();
+}
+
+function replacementProfile(): EtfProfile {
+  return (
+    etfProfiles.find((profile) => profile.symbol === defaultCashReplacementSymbol) ?? {
+      symbol: defaultCashReplacementSymbol,
+      name: "银华日利ETF",
+      exchange: "SH",
+      category: "货币",
+      trackingIndex: "货币市场",
+      expenseRatio: 0.003
+    }
+  );
+}
+
+function replacementBarsForDates(dates: string[]): MarketBar[] {
+  const fallbackBars = new Map(
+    marketBars
+      .filter((bar) => bar.symbol === defaultCashReplacementSymbol)
+      .map((bar) => [bar.date, bar])
+  );
+  let close = fallbackBars.values().next().value?.close ?? 100;
+
+  return dates.map((date) => {
+    const fallback = fallbackBars.get(date);
+    if (fallback) {
+      close = fallback.close;
+      return fallback;
+    }
+
+    const open = close;
+    close = Number((close * (1 + 0.00006)).toFixed(4));
+    const amount = 1_400_000_000;
+    return {
+      symbol: defaultCashReplacementSymbol,
+      date,
+      open: Number(open.toFixed(4)),
+      high: Math.max(open, close),
+      low: Math.min(open, close),
+      close,
+      volume: Math.round(amount / close / 100),
+      amount
+    };
+  });
+}
+
+function supplementCashReplacement(
+  profiles: EtfProfile[],
+  bars: MarketBar[],
+  succeededSymbols?: string[]
+): {
+  profiles: EtfProfile[];
+  bars: MarketBar[];
+  succeededSymbols?: string[];
+} {
+  const hasProfile = profiles.some((profile) => profile.symbol === defaultCashReplacementSymbol);
+  const hasBars = bars.some((bar) => bar.symbol === defaultCashReplacementSymbol);
+
+  if (hasProfile && hasBars) {
+    return { profiles, bars, succeededSymbols };
+  }
+
+  const nextProfiles = hasProfile ? profiles : [...profiles, replacementProfile()];
+  const nextBars = hasBars
+    ? bars
+    : [...bars, ...replacementBarsForDates(uniqueSortedDates(bars))];
+  const nextSucceededSymbols =
+    succeededSymbols && !succeededSymbols.includes(defaultCashReplacementSymbol)
+      ? [...succeededSymbols, defaultCashReplacementSymbol]
+      : succeededSymbols;
+
+  return {
+    profiles: nextProfiles,
+    bars: nextBars,
+    succeededSymbols: nextSucceededSymbols
+  };
+}
+
 export async function loadGeneratedDataset(
   fetcher: typeof fetch = fetch,
   url = generatedDatasetUrl()
@@ -104,12 +185,16 @@ export async function loadGeneratedDataset(
       return null;
     }
 
-    const profiles = payload.profiles.filter(isProfile);
-    const bars = payload.bars.filter(isMarketBar);
+    const parsedProfiles = payload.profiles.filter(isProfile);
+    const parsedBars = payload.bars.filter(isMarketBar);
 
-    if (profiles.length === 0 || bars.length === 0) {
+    if (parsedProfiles.length === 0 || parsedBars.length === 0) {
       return null;
     }
+
+    const succeededSymbols = stringArray(payload.succeededSymbols);
+    const { profiles, bars, succeededSymbols: supplementedSucceededSymbols } =
+      supplementCashReplacement(parsedProfiles, parsedBars, succeededSymbols);
 
     return {
       source: typeof payload.source === "string" ? payload.source : "generated",
@@ -117,7 +202,7 @@ export async function loadGeneratedDataset(
         typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
       latestDate: typeof payload.latestDate === "string" ? payload.latestDate : undefined,
       requestedSymbols: stringArray(payload.requestedSymbols),
-      succeededSymbols: stringArray(payload.succeededSymbols),
+      succeededSymbols: supplementedSucceededSymbols,
       failedSymbols: stringRecord(payload.failedSymbols),
       profiles,
       bars
