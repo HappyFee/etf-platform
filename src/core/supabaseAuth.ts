@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AccountProfile, AccountWorkspace } from "./accountStorage";
-import type { StrategyConfig } from "./types";
+import { isBacktestSnapshotList } from "./backtestArchive";
+import type { BacktestSnapshot, StrategyConfig } from "./types";
 
 const workspaceTable = "strategy_workspaces";
 
@@ -32,7 +33,11 @@ interface WorkspaceRow {
 
 interface WorkspaceUpsertRow {
   user_id: string;
-  strategies: StrategyConfig[];
+  strategies: {
+    version: 2;
+    strategies: StrategyConfig[];
+    snapshots: BacktestSnapshot[];
+  };
   active_strategy_id: string;
 }
 
@@ -113,6 +118,33 @@ function isStrategyList(value: unknown): value is StrategyConfig[] {
   });
 }
 
+function workspacePayload(value: unknown): {
+  strategies: StrategyConfig[];
+  snapshots: BacktestSnapshot[];
+} | null {
+  if (isStrategyList(value)) {
+    return { strategies: value, snapshots: [] };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const payload = value as {
+    version?: unknown;
+    strategies?: unknown;
+    snapshots?: unknown;
+  };
+  if (payload.version !== 2 || !isStrategyList(payload.strategies)) {
+    return null;
+  }
+
+  return {
+    strategies: payload.strategies,
+    snapshots: isBacktestSnapshotList(payload.snapshots) ? payload.snapshots : []
+  };
+}
+
 function toError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -142,23 +174,25 @@ export async function loadSupabaseWorkspace(
     throw toError(error);
   }
 
-  if (!data || !isStrategyList(data.strategies)) {
+  const payload = data ? workspacePayload(data.strategies) : null;
+  if (!data || !payload) {
     return null;
   }
 
   const activeStrategyId =
     typeof data.active_strategy_id === "string" &&
-    data.strategies.some((strategy) => strategy.id === data.active_strategy_id)
+    payload.strategies.some((strategy) => strategy.id === data.active_strategy_id)
       ? data.active_strategy_id
-      : data.strategies[0]?.id;
+      : payload.strategies[0]?.id;
 
   if (!activeStrategyId) {
     return null;
   }
 
   return {
-    strategies: data.strategies,
-    activeStrategyId
+    strategies: payload.strategies,
+    activeStrategyId,
+    snapshots: payload.snapshots
   };
 }
 
@@ -169,7 +203,11 @@ export async function saveSupabaseWorkspace(
 ): Promise<void> {
   const { error } = await client.from(workspaceTable).upsert({
     user_id: userId,
-    strategies: workspace.strategies,
+    strategies: {
+      version: 2,
+      strategies: workspace.strategies,
+      snapshots: workspace.snapshots
+    },
     active_strategy_id: workspace.activeStrategyId
   });
 

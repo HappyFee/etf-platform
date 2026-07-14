@@ -10,7 +10,10 @@ import type {
   MarketBar,
   RobustnessCase,
   RobustnessReport,
-  StrategyConfig
+  StrategyConfig,
+  ValidationCheck,
+  ValidationReport,
+  ValidationSegment
 } from "./types";
 
 function cloneStrategy<T extends StrategyConfig>(strategy: T): T {
@@ -194,4 +197,222 @@ export function buildRobustnessReport({
       : `${negativeCases}/${cases.length} 个压力场景为负收益，建议降低参数依赖或扩大样本外验证。`;
 
   return { cases, summary };
+}
+
+function validationSegment(result: BacktestResult): ValidationSegment | undefined {
+  const startDate = result.equityCurve[0]?.date;
+  const endDate = result.equityCurve.at(-1)?.date;
+  if (!startDate || !endDate) {
+    return undefined;
+  }
+
+  return {
+    startDate,
+    endDate,
+    totalReturn: result.metrics.totalReturn,
+    annualizedReturn: result.metrics.annualizedReturn,
+    maxDrawdown: result.metrics.maxDrawdown,
+    sharpe: result.metrics.sharpe
+  };
+}
+
+function causalityReplayCheck({
+  bars,
+  profiles,
+  config,
+  strategyBook,
+  result
+}: {
+  bars: MarketBar[];
+  profiles: EtfProfile[];
+  config: StrategyConfig;
+  strategyBook: StrategyConfig[];
+  result: BacktestResult;
+}): ValidationCheck {
+  if (!isBaseStrategy(config)) {
+    return {
+      label: "历史截断重放",
+      status: "warn",
+      detail: "组合层请分别检查各基础子策略的截断重放结果"
+    };
+  }
+
+  const candidates = result.rebalances.filter(
+    (event) => event.signalDate && event.rankings.length > 0
+  );
+  if (candidates.length === 0) {
+    return {
+      label: "历史截断重放",
+      status: "warn",
+      detail: "当前区间没有可用于重放的历史调仓信号"
+    };
+  }
+
+  const sampleIndexes = [
+    0,
+    Math.floor((candidates.length - 1) / 2),
+    candidates.length - 1
+  ];
+  const samples = [...new Set(sampleIndexes)].map((index) => candidates[index]);
+  let mismatches = 0;
+
+  for (const event of samples) {
+    const signalDate = event.signalDate!;
+    const replayConfig = {
+      ...cloneStrategy(config),
+      backtestEndDate: signalDate
+    } as StrategyConfig;
+    const replay = runBacktest({
+      bars: bars.filter((bar) => bar.date <= signalDate),
+      profiles,
+      config: replayConfig,
+      strategyBook
+    });
+    const expected = event.rankings
+      .slice(0, 10)
+      .map((row) => row.symbol)
+      .join(",");
+    const actual = replay.latestSignal.rankings
+      .slice(0, 10)
+      .map((row) => row.symbol)
+      .join(",");
+    if (expected !== actual) {
+      mismatches += 1;
+    }
+  }
+
+  return {
+    label: "历史截断重放",
+    status: mismatches === 0 ? "pass" : "warn",
+    detail:
+      mismatches === 0
+        ? `抽样 ${samples.length} 个信号，截断未来数据后排名保持一致`
+        : `${mismatches}/${samples.length} 个抽样信号在截断未来数据后发生变化`
+  };
+}
+
+export function buildValidationReport({
+  bars,
+  profiles,
+  config,
+  strategyBook,
+  result
+}: {
+  bars: MarketBar[];
+  profiles: EtfProfile[];
+  config: StrategyConfig;
+  strategyBook: StrategyConfig[];
+  result?: BacktestResult;
+}): ValidationReport {
+  const dates = [...new Set(bars.map((bar) => bar.date))]
+    .sort()
+    .filter(
+      (date) =>
+        (!config.backtestStartDate || date >= config.backtestStartDate) &&
+        (!config.backtestEndDate || date <= config.backtestEndDate)
+    );
+  const fullResult =
+    result ?? runBacktest({ bars, profiles, config, strategyBook });
+  const signalViolations = fullResult.rebalances.filter(
+    (event) =>
+      !event.signalDate || !event.tradeDate || event.signalDate >= event.tradeDate
+  ).length;
+  const checks: ValidationReport["checks"] = [
+    {
+      label: "信号与成交分离",
+      status: signalViolations === 0 ? "pass" : "warn",
+      detail:
+        signalViolations === 0
+          ? "全部调仓均使用下一交易日成交"
+          : `${signalViolations} 次调仓未满足 T+1 成交`
+    }
+  ];
+  checks.push(
+    causalityReplayCheck({
+      bars,
+      profiles,
+      config,
+      strategyBook,
+      result: fullResult
+    }),
+    {
+      label: "固定 ETF 池偏差",
+      status: "warn",
+      detail: "ETF 池未记录历史成分变更，仍需警惕幸存者偏差"
+    }
+  );
+
+  if (dates.length < 120) {
+    return {
+      splitDate: "",
+      status: "unavailable",
+      summary: "有效区间不足 120 个交易日，暂不生成样本外判断。",
+      checks
+    };
+  }
+
+  const splitIndex = Math.min(
+    dates.length - 60,
+    Math.max(60, Math.floor(dates.length * 0.7))
+  );
+  const splitDate = dates[splitIndex];
+  const inSampleEndDate = dates[splitIndex - 1];
+  const inSampleConfig = {
+    ...cloneStrategy(config),
+    backtestStartDate: dates[0],
+    backtestEndDate: inSampleEndDate
+  } as StrategyConfig;
+  const outOfSampleConfig = {
+    ...cloneStrategy(config),
+    backtestStartDate: splitDate,
+    backtestEndDate: dates.at(-1)
+  } as StrategyConfig;
+  const inSampleResult = runBacktest({
+    bars,
+    profiles,
+    config: inSampleConfig,
+    strategyBook
+  });
+  const outOfSampleResult = runBacktest({
+    bars,
+    profiles,
+    config: outOfSampleConfig,
+    strategyBook
+  });
+  const inSample = validationSegment(inSampleResult);
+  const outOfSample = validationSegment(outOfSampleResult);
+
+  if (!inSample || !outOfSample) {
+    return {
+      splitDate,
+      inSample,
+      outOfSample,
+      status: "unavailable",
+      summary: "切分后的有效回测数据不足，暂不生成样本外判断。",
+      checks
+    };
+  }
+
+  const weakSignals = [
+    outOfSample.annualizedReturn < 0,
+    outOfSample.sharpe < 0,
+    outOfSample.maxDrawdown > Math.max(0.1, inSample.maxDrawdown * 1.5),
+    inSample.annualizedReturn * outOfSample.annualizedReturn < 0
+  ].filter(Boolean).length;
+  const status = weakSignals === 0 ? "stable" : weakSignals === 1 ? "mixed" : "weak";
+  const summary =
+    status === "stable"
+      ? "样本外收益和风险调整表现保持为正，当前参数稳定性较好。"
+      : status === "mixed"
+        ? "样本内外有一项关键指标不一致或转弱，建议缩小仓位或继续观察。"
+        : "样本外收益或风险明显恶化，不建议仅凭全区间结果使用。";
+
+  return {
+    splitDate,
+    inSample,
+    outOfSample,
+    status,
+    summary,
+    checks
+  };
 }

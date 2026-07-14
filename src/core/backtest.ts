@@ -31,6 +31,30 @@ interface DailyPortfolioReturn {
   warnings: string[];
 }
 
+interface ResolvedExecutionConfig {
+  price: ExecutionConfig["price"];
+  slippageBps: number;
+  initialCapital: number;
+  minimumCommission: number;
+  maxParticipationRate: number;
+  priceLimitThreshold: number;
+}
+
+interface MarketLookup {
+  getBar: (symbol: string, date: string) => MarketBar | null;
+}
+
+interface RebalanceExecution {
+  holdings: Holding[];
+  turnover: number;
+  tradedWeight: number;
+  costRate: number;
+  commissionAmount: number;
+  fillRate: number;
+  constraintCount: number;
+  warnings: string[];
+}
+
 interface PendingRebalance {
   signalDate: string;
   tradeDate: string;
@@ -73,11 +97,76 @@ export function createCloseLookup(bars: MarketBar[]): CloseLookup {
   };
 }
 
-function defaultExecution(config: StrategyConfig): ExecutionConfig {
+function createMarketLookup(bars: MarketBar[]): MarketLookup {
+  const barsBySymbol = new Map<string, Map<string, MarketBar>>();
+
+  for (const bar of bars) {
+    const barsByDate = barsBySymbol.get(bar.symbol) ?? new Map<string, MarketBar>();
+    barsByDate.set(bar.date, bar);
+    barsBySymbol.set(bar.symbol, barsByDate);
+  }
+
+  return {
+    getBar(symbol: string, date: string): MarketBar | null {
+      return barsBySymbol.get(symbol)?.get(date) ?? null;
+    }
+  };
+}
+
+function defaultExecution(config: StrategyConfig): ResolvedExecutionConfig {
   return {
     price: config.execution?.price ?? "next_close",
-    slippageBps: Math.max(0, config.execution?.slippageBps ?? 3)
+    slippageBps: Math.max(0, config.execution?.slippageBps ?? 3),
+    initialCapital: Math.max(1, config.execution?.initialCapital ?? 100_000),
+    minimumCommission: Math.max(
+      0,
+      config.execution?.minimumCommission ?? (config.kind === "composite" ? 0 : 5)
+    ),
+    maxParticipationRate: Math.min(
+      1,
+      Math.max(0, config.execution?.maxParticipationRate ?? 0.1)
+    ),
+    priceLimitThreshold: Math.min(
+      1,
+      Math.max(0, config.execution?.priceLimitThreshold ?? 0.1)
+    )
   };
+}
+
+function portfolioPeriodReturn(
+  marketLookup: MarketLookup,
+  startDate: string,
+  startField: "open" | "close",
+  endDate: string,
+  endField: "open" | "close",
+  holdings: Holding[],
+  cashReturnAnnual: number,
+  dayFraction = 1
+): DailyPortfolioReturn {
+  const cashPeriodReturn = (cashReturnAnnual / 252) * dayFraction;
+
+  if (holdings.length === 0) {
+    return { dailyReturn: cashPeriodReturn, warnings: [] };
+  }
+
+  const warnings: string[] = [];
+  const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
+  const cashWeight = Math.max(0, 1 - investedWeight);
+  const dailyReturn = holdings.reduce((total, holding) => {
+    const startBar = marketLookup.getBar(holding.symbol, startDate);
+    const endBar = marketLookup.getBar(holding.symbol, endDate);
+    const startPrice = startBar?.[startField];
+    const endPrice = endBar?.[endField];
+    if (!startPrice || !endPrice) {
+      warnings.push(
+        `${endDate} ${holding.symbol} 缺少行情，按现金收益处理。`
+      );
+      return total + holding.weight * cashPeriodReturn;
+    }
+    return total + holding.weight * (endPrice / startPrice - 1);
+  }, cashWeight * cashPeriodReturn);
+
+  return { dailyReturn, warnings };
 }
 
 function dailyPortfolioReturn(
@@ -88,27 +177,18 @@ function dailyPortfolioReturn(
   cashReturnAnnual: number
 ): DailyPortfolioReturn {
   const cashDailyReturn = cashReturnAnnual / 252;
-
-  if (holdings.length === 0) {
-    return { dailyReturn: cashDailyReturn, warnings: [] };
-  }
-
-  const warnings: string[] = [];
   const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
   const cashWeight = Math.max(0, 1 - investedWeight);
   const dailyReturn = holdings.reduce((total, holding) => {
     const previous = closeLookup.getClose(holding.symbol, previousDate);
     const current = closeLookup.getClose(holding.symbol, currentDate);
     if (!previous || !current) {
-      warnings.push(
-        `${currentDate} ${holding.symbol} 缺少行情，按现金收益处理。`
-      );
       return total + holding.weight * cashDailyReturn;
     }
     return total + holding.weight * (current / previous - 1);
   }, cashWeight * cashDailyReturn);
 
-  return { dailyReturn, warnings };
+  return { dailyReturn, warnings: [] };
 }
 
 function isCompositeStrategy(config: StrategyConfig): config is CompositeStrategyConfig {
@@ -274,17 +354,241 @@ function normalizeHoldings(holdings: Holding[]): Holding[] {
   }));
 }
 
-function calculateTurnover(previous: Holding[], next: Holding[]): number {
-  const symbols = new Set([...previous.map((item) => item.symbol), ...next.map((item) => item.symbol)]);
-  let turnover = 0;
-
-  for (const symbol of symbols) {
-    const previousWeight = previous.find((item) => item.symbol === symbol)?.weight ?? 0;
-    const nextWeight = next.find((item) => item.symbol === symbol)?.weight ?? 0;
-    turnover += Math.abs(nextWeight - previousWeight);
+function tradeBlockedByPriceLimit(
+  marketLookup: MarketLookup,
+  symbol: string,
+  previousDate: string,
+  tradeDate: string,
+  direction: 1 | -1,
+  execution: ResolvedExecutionConfig
+): boolean {
+  if (execution.priceLimitThreshold <= 0) {
+    return false;
   }
 
-  return turnover / 2;
+  const previousBar = marketLookup.getBar(symbol, previousDate);
+  const tradeBar = marketLookup.getBar(symbol, tradeDate);
+  const tradePrice = execution.price === "next_open" ? tradeBar?.open : tradeBar?.close;
+  if (!previousBar?.close || !tradePrice || !tradeBar) {
+    return false;
+  }
+
+  const move = tradePrice / previousBar.close - 1;
+  const threshold = execution.priceLimitThreshold * 0.995;
+  const reachesDirectionalLimit = direction > 0 ? move >= threshold : move <= -threshold;
+  if (!reachesDirectionalLimit) {
+    return false;
+  }
+
+  if (execution.price === "next_open") {
+    return true;
+  }
+
+  const range = Math.abs(tradeBar.high - tradeBar.low) / Math.max(0.0001, tradePrice);
+  return range < 0.0005;
+}
+
+function orderCapacityWeight(
+  marketLookup: MarketLookup,
+  symbol: string,
+  previousDate: string,
+  tradeDate: string,
+  portfolioValue: number,
+  execution: ResolvedExecutionConfig
+): number {
+  if (execution.maxParticipationRate <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const liquidityDate = execution.price === "next_open" ? previousDate : tradeDate;
+  const amount = marketLookup.getBar(symbol, liquidityDate)?.amount;
+  if (!amount || amount <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return (amount * execution.maxParticipationRate) / Math.max(1, portfolioValue);
+}
+
+function executeRebalance({
+  previous,
+  target,
+  marketLookup,
+  previousDate,
+  tradeDate,
+  portfolioValue,
+  transactionCostBps,
+  execution
+}: {
+  previous: Holding[];
+  target: Holding[];
+  marketLookup: MarketLookup;
+  previousDate: string;
+  tradeDate: string;
+  portfolioValue: number;
+  transactionCostBps: number;
+  execution: ResolvedExecutionConfig;
+}): RebalanceExecution {
+  const epsilon = 0.0001;
+  const previousMap = new Map(previous.map((holding) => [holding.symbol, holding]));
+  const targetMap = new Map(target.map((holding) => [holding.symbol, holding]));
+  const nextMap = new Map(
+    previous.map((holding) => [holding.symbol, { ...holding }])
+  );
+  const symbols = new Set([...previousMap.keys(), ...targetMap.keys()]);
+  const requestedTradedWeight = [...symbols].reduce((total, symbol) => {
+    const previousWeight = previousMap.get(symbol)?.weight ?? 0;
+    const targetWeight = targetMap.get(symbol)?.weight ?? 0;
+    return total + Math.abs(targetWeight - previousWeight);
+  }, 0);
+  let priceLimitBlocks = 0;
+  let volumeLimits = 0;
+  let cashLimits = 0;
+
+  for (const symbol of symbols) {
+    const current = nextMap.get(symbol);
+    const previousWeight = current?.weight ?? 0;
+    const targetWeight = targetMap.get(symbol)?.weight ?? 0;
+    if (targetWeight >= previousWeight - epsilon) {
+      continue;
+    }
+
+    const requested = previousWeight - targetWeight;
+    if (
+      tradeBlockedByPriceLimit(
+        marketLookup,
+        symbol,
+        previousDate,
+        tradeDate,
+        -1,
+        execution
+      )
+    ) {
+      priceLimitBlocks += 1;
+      continue;
+    }
+
+    const capacity = orderCapacityWeight(
+      marketLookup,
+      symbol,
+      previousDate,
+      tradeDate,
+      portfolioValue,
+      execution
+    );
+    const filled = Math.min(requested, capacity);
+    if (filled < requested - epsilon) {
+      volumeLimits += 1;
+    }
+    if (current) {
+      nextMap.set(symbol, { ...current, weight: previousWeight - filled });
+    }
+  }
+
+  let availableCash = Math.max(
+    0,
+    1 - [...nextMap.values()].reduce((total, holding) => total + holding.weight, 0)
+  );
+
+  for (const symbol of symbols) {
+    const previousWeight = previousMap.get(symbol)?.weight ?? 0;
+    const targetHolding = targetMap.get(symbol);
+    const targetWeight = targetHolding?.weight ?? 0;
+    if (!targetHolding || targetWeight <= previousWeight + epsilon) {
+      continue;
+    }
+
+    const requested = targetWeight - previousWeight;
+    if (
+      tradeBlockedByPriceLimit(
+        marketLookup,
+        symbol,
+        previousDate,
+        tradeDate,
+        1,
+        execution
+      )
+    ) {
+      priceLimitBlocks += 1;
+      continue;
+    }
+
+    const capacity = orderCapacityWeight(
+      marketLookup,
+      symbol,
+      previousDate,
+      tradeDate,
+      portfolioValue,
+      execution
+    );
+    const liquidityFilled = Math.min(requested, capacity);
+    if (liquidityFilled < requested - epsilon) {
+      volumeLimits += 1;
+    }
+    const filled = Math.min(liquidityFilled, availableCash);
+    if (filled < liquidityFilled - epsilon) {
+      cashLimits += 1;
+    }
+    if (filled <= epsilon) {
+      continue;
+    }
+
+    const current = nextMap.get(symbol) ?? { ...targetHolding, weight: 0 };
+    nextMap.set(symbol, { ...current, weight: current.weight + filled });
+    availableCash = Math.max(0, availableCash - filled);
+  }
+
+  const holdings = [...nextMap.values()]
+    .filter((holding) => holding.weight > epsilon)
+    .sort((left, right) => right.weight - left.weight);
+  const tradedWeight = [...symbols].reduce((total, symbol) => {
+    const previousWeight = previousMap.get(symbol)?.weight ?? 0;
+    const nextWeight = holdings.find((holding) => holding.symbol === symbol)?.weight ?? 0;
+    return total + Math.abs(nextWeight - previousWeight);
+  }, 0);
+  const normalizedPortfolioValue = Math.max(1, portfolioValue);
+  const commissionAmount = [...symbols].reduce((total, symbol) => {
+    const previousWeight = previousMap.get(symbol)?.weight ?? 0;
+    const nextWeight = holdings.find((holding) => holding.symbol === symbol)?.weight ?? 0;
+    const orderWeight = Math.abs(nextWeight - previousWeight);
+    if (orderWeight <= epsilon) {
+      return total;
+    }
+    const notional = orderWeight * normalizedPortfolioValue;
+    return (
+      total +
+      Math.max(
+        (notional * Math.max(0, transactionCostBps)) / 10_000,
+        execution.minimumCommission
+      )
+    );
+  }, 0);
+  const slippageAmount =
+    (normalizedPortfolioValue * tradedWeight * execution.slippageBps) / 10_000;
+  const warnings: string[] = [];
+
+  if (priceLimitBlocks > 0) {
+    warnings.push(`${tradeDate} 有 ${priceLimitBlocks} 笔交易触发涨跌停约束，未成交。`);
+  }
+  if (volumeLimits > 0) {
+    warnings.push(`${tradeDate} 有 ${volumeLimits} 笔交易受成交额参与率限制，仅部分成交。`);
+  }
+  if (cashLimits > 0) {
+    warnings.push(`${tradeDate} 有 ${cashLimits} 笔买入因可用现金不足，仅部分成交。`);
+  }
+
+  return {
+    holdings,
+    turnover: tradedWeight / 2,
+    tradedWeight,
+    costRate: Math.min(0.99, (commissionAmount + slippageAmount) / normalizedPortfolioValue),
+    commissionAmount,
+    fillRate:
+      requestedTradedWeight <= epsilon
+        ? 1
+        : Math.min(1, tradedWeight / requestedTradedWeight),
+    constraintCount: priceLimitBlocks + volumeLimits + cashLimits,
+    warnings
+  };
 }
 
 function drawdownAt(equity: number, peak: number): number {
@@ -521,6 +825,7 @@ function emptyBacktestResult(warnings: string[]): BacktestResult {
 function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig }): BacktestResult {
   const barsBySymbol = groupBarsBySymbol(input.bars);
   const closeLookup = createCloseLookup(input.bars);
+  const marketLookup = createMarketLookup(input.bars);
   const range = resolveBacktestRange(uniqueSortedDates(input.bars), input.config);
   const { dates, startIndex } = range;
 
@@ -553,58 +858,123 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
 
   for (let index = startIndex; index < dates.length; index += 1) {
     const date = dates[index];
+    const dayStartingEquity = equity;
 
-    if (index === startIndex) {
-      curve.push({ date, equity, dailyReturn: 0, drawdown: 0 });
-    } else {
-      const dailyResult = dailyPortfolioReturn(
-        closeLookup,
-        dates[index - 1],
-        date,
-        holdings,
-        input.config.risk.cashReturnAnnual
-      );
-      const dailyReturn = dailyResult.dailyReturn;
-      warnings.push(...dailyResult.warnings);
-      equity *= 1 + dailyReturn;
-      peak = Math.max(peak, equity);
-      curve.push({
-        date,
-        equity,
-        dailyReturn,
-        drawdown: drawdownAt(equity, peak)
-      });
-    }
+    if (index > startIndex) {
+      const previousDate = dates[index - 1];
+      const pendingTrade = pendingRebalance as PendingRebalance | null;
+      const tradesToday = pendingTrade?.tradeDate === date;
 
-    if (pendingRebalance && pendingRebalance.tradeDate === date) {
-      const nextHoldings = pendingRebalance.holdings;
-      const turnover = calculateTurnover(holdings, nextHoldings);
-      const totalCostBps = input.config.transactionCostBps + execution.slippageBps;
-      const previousCurvePoint = curve.length > 1 ? curve[curve.length - 2] : undefined;
-      const dayStartingEquity = previousCurvePoint?.equity ?? 1;
-      equity *= 1 - (turnover * totalCostBps) / 10_000;
-      peak = Math.max(peak, equity);
-      const latestPoint = curve.at(-1);
-      if (latestPoint) {
-        latestPoint.equity = equity;
-        latestPoint.dailyReturn =
-          dayStartingEquity === 0 ? 0 : equity / dayStartingEquity - 1;
-        latestPoint.drawdown = drawdownAt(equity, peak);
+      if (tradesToday && pendingTrade && execution.price === "next_open") {
+        const overnight = portfolioPeriodReturn(
+          marketLookup,
+          previousDate,
+          "close",
+          date,
+          "open",
+          holdings,
+          input.config.risk.cashReturnAnnual,
+          0.5
+        );
+        warnings.push(...overnight.warnings);
+        equity *= 1 + overnight.dailyReturn;
+
+        const trade = executeRebalance({
+          previous: holdings,
+          target: pendingTrade.holdings,
+          marketLookup,
+          previousDate,
+          tradeDate: date,
+          portfolioValue: execution.initialCapital * equity,
+          transactionCostBps: input.config.transactionCostBps,
+          execution
+        });
+        warnings.push(...trade.warnings);
+        equity *= 1 - trade.costRate;
+        holdings = trade.holdings;
+        rebalances.push({
+          date,
+          signalDate: pendingTrade.signalDate,
+          tradeDate: pendingTrade.tradeDate,
+          holdings,
+          rankings: pendingTrade.rankings,
+          turnover: trade.turnover,
+          tradedWeight: trade.tradedWeight,
+          costBps: input.config.transactionCostBps,
+          slippageBps: execution.slippageBps,
+          costRate: trade.costRate,
+          commissionAmount: trade.commissionAmount,
+          fillRate: trade.fillRate,
+          constraintCount: trade.constraintCount
+        });
+        pendingRebalance = null;
+
+        const intraday = portfolioPeriodReturn(
+          marketLookup,
+          date,
+          "open",
+          date,
+          "close",
+          holdings,
+          input.config.risk.cashReturnAnnual,
+          0.5
+        );
+        warnings.push(...intraday.warnings);
+        equity *= 1 + intraday.dailyReturn;
+      } else {
+        const dailyResult = portfolioPeriodReturn(
+          marketLookup,
+          previousDate,
+          "close",
+          date,
+          "close",
+          holdings,
+          input.config.risk.cashReturnAnnual
+        );
+        warnings.push(...dailyResult.warnings);
+        equity *= 1 + dailyResult.dailyReturn;
+
+        if (tradesToday && pendingTrade) {
+          const trade = executeRebalance({
+            previous: holdings,
+            target: pendingTrade.holdings,
+            marketLookup,
+            previousDate,
+            tradeDate: date,
+            portfolioValue: execution.initialCapital * equity,
+            transactionCostBps: input.config.transactionCostBps,
+            execution
+          });
+          warnings.push(...trade.warnings);
+          equity *= 1 - trade.costRate;
+          holdings = trade.holdings;
+          rebalances.push({
+            date,
+            signalDate: pendingTrade.signalDate,
+            tradeDate: pendingTrade.tradeDate,
+            holdings,
+            rankings: pendingTrade.rankings,
+            turnover: trade.turnover,
+            tradedWeight: trade.tradedWeight,
+            costBps: input.config.transactionCostBps,
+            slippageBps: execution.slippageBps,
+            costRate: trade.costRate,
+            commissionAmount: trade.commissionAmount,
+            fillRate: trade.fillRate,
+            constraintCount: trade.constraintCount
+          });
+          pendingRebalance = null;
+        }
       }
-
-      holdings = nextHoldings;
-      rebalances.push({
-        date,
-        signalDate: pendingRebalance.signalDate,
-        tradeDate: pendingRebalance.tradeDate,
-        holdings,
-        rankings: pendingRebalance.rankings,
-        turnover,
-        costBps: input.config.transactionCostBps,
-        slippageBps: execution.slippageBps
-      });
-      pendingRebalance = null;
     }
+
+    peak = Math.max(peak, equity);
+    curve.push({
+      date,
+      equity,
+      dailyReturn: dayStartingEquity === 0 ? 0 : equity / dayStartingEquity - 1,
+      drawdown: drawdownAt(equity, peak)
+    });
 
     if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
       const evaluation = evaluateUniverse({
@@ -714,23 +1084,35 @@ function compositeRebalances(
   costBps: number,
   slippageBps: number
 ): RebalanceEvent[] {
-  const turnoverByDate = new Map<string, number>();
+  const rebalancesByDate = new Map<
+    string,
+    { turnover: number; signalDate?: string }
+  >();
 
   for (const child of childResults) {
     for (const event of child.result.rebalances) {
-      const current = turnoverByDate.get(event.date) ?? 0;
-      turnoverByDate.set(event.date, current + child.weight * event.turnover);
+      const current = rebalancesByDate.get(event.date) ?? { turnover: 0 };
+      rebalancesByDate.set(event.date, {
+        turnover: current.turnover + child.weight * event.turnover,
+        signalDate:
+          event.signalDate && (!current.signalDate || event.signalDate > current.signalDate)
+            ? event.signalDate
+            : current.signalDate
+      });
     }
   }
 
-  return [...turnoverByDate.entries()]
-    .filter(([, turnover]) => turnover > 0)
+  return [...rebalancesByDate.entries()]
+    .filter(([, event]) => event.turnover > 0)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([date, turnover]) => ({
+    .map(([date, event]) => ({
       date,
+      signalDate: event.signalDate,
+      tradeDate: date,
       holdings: [],
       rankings: [],
-      turnover,
+      turnover: event.turnover,
+      tradedWeight: event.turnover * 2,
       costBps,
       slippageBps
     }));
@@ -809,9 +1191,26 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
             0
           );
     const costEvent = rebalanceByDate.get(date);
-    const costRate = costEvent
-      ? (costEvent.turnover * (input.config.transactionCostBps + execution.slippageBps)) / 10_000
-      : 0;
+    const tradedWeight = costEvent?.tradedWeight ?? 0;
+    const portfolioValue = Math.max(1, execution.initialCapital * equity);
+    const commissionAmount =
+      tradedWeight > 0
+        ? Math.max(
+            (portfolioValue * tradedWeight * input.config.transactionCostBps) / 10_000,
+            execution.minimumCommission
+          )
+        : 0;
+    const costRate = Math.min(
+      0.99,
+      commissionAmount / portfolioValue +
+        (tradedWeight * execution.slippageBps) / 10_000
+    );
+    if (costEvent) {
+      costEvent.costRate = costRate;
+      costEvent.commissionAmount = commissionAmount;
+      costEvent.fillRate = 1;
+      costEvent.constraintCount = 0;
+    }
     const dailyReturn = (1 + childDailyReturn) * (1 - costRate) - 1;
 
     equity *= 1 + dailyReturn;

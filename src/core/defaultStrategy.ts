@@ -86,6 +86,14 @@ export const defaultStrategy: BaseStrategyConfig = {
     fixedWeights: [0.4, 0.3, 0.3]
   },
   transactionCostBps: 6,
+  execution: {
+    price: "next_close",
+    slippageBps: 3,
+    initialCapital: 100_000,
+    minimumCommission: 5,
+    maxParticipationRate: 0.1,
+    priceLimitThreshold: 0.1
+  },
   benchmarkSymbol: defaultBenchmarkSymbol,
   risk: {
     cashReturnAnnual: 0.015,
@@ -194,6 +202,14 @@ export const defaultCompositeStrategy: CompositeStrategyConfig = {
     { strategyId: growthStrategy.id, weight: 0.2 }
   ],
   transactionCostBps: 0,
+  execution: {
+    price: "next_close",
+    slippageBps: 3,
+    initialCapital: 100_000,
+    minimumCommission: 0,
+    maxParticipationRate: 0.1,
+    priceLimitThreshold: 0.1
+  },
   benchmarkSymbol: defaultBenchmarkSymbol,
   risk: {
     cashReturnAnnual: 0.015

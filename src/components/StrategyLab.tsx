@@ -10,6 +10,7 @@ import type {
   BaseStrategyConfig,
   CompositeStrategyConfig,
   EtfProfile,
+  ExecutionConfig,
   FactorDirection,
   FactorSelection,
   FilterOperator,
@@ -97,6 +98,160 @@ function BacktestSettingsControls({
         />
       </label>
     </>
+  );
+}
+
+function ExecutionSettingsControls({
+  config,
+  onChange
+}: {
+  config: StrategyConfig;
+  onChange: (config: StrategyConfig) => void;
+}) {
+  const execution: ExecutionConfig = {
+    price: config.execution?.price ?? "next_close",
+    slippageBps: config.execution?.slippageBps ?? 3,
+    initialCapital: config.execution?.initialCapital ?? 100_000,
+    minimumCommission:
+      config.execution?.minimumCommission ?? (config.kind === "composite" ? 0 : 5),
+    maxParticipationRate: config.execution?.maxParticipationRate ?? 0.1,
+    priceLimitThreshold: config.execution?.priceLimitThreshold ?? 0.1
+  };
+
+  function updateExecution(patch: Partial<ExecutionConfig>) {
+    onChange({
+      ...config,
+      execution: {
+        ...execution,
+        ...patch
+      }
+    });
+  }
+
+  return (
+    <div className="control-grid execution-grid">
+      <label>
+        成交时点
+        <select
+          data-testid="execution-price-select"
+          value={execution.price}
+          onChange={(event) =>
+            updateExecution({ price: event.target.value as ExecutionConfig["price"] })
+          }
+        >
+          <option value="next_close">下一交易日收盘</option>
+          <option value="next_open">下一交易日开盘</option>
+        </select>
+      </label>
+      <label>
+        滑点 bps
+        <input
+          data-testid="slippage-input"
+          max={100}
+          min={0}
+          step={1}
+          type="number"
+          value={execution.slippageBps}
+          onChange={(event) =>
+            updateExecution({
+              slippageBps: boundedNumber(
+                Number(event.target.value),
+                execution.slippageBps,
+                0,
+                100
+              )
+            })
+          }
+        />
+      </label>
+      <label>
+        初始资金（万元）
+        <input
+          data-testid="initial-capital-input"
+          max={100_000}
+          min={0.1}
+          step={1}
+          type="number"
+          value={(execution.initialCapital ?? 100_000) / 10_000}
+          onChange={(event) =>
+            updateExecution({
+              initialCapital:
+                boundedNumber(
+                  Number(event.target.value),
+                  (execution.initialCapital ?? 100_000) / 10_000,
+                  0.1,
+                  100_000
+                ) * 10_000
+            })
+          }
+        />
+      </label>
+      <label>
+        单笔最低佣金（元）
+        <input
+          data-testid="minimum-commission-input"
+          max={1_000}
+          min={0}
+          step={1}
+          type="number"
+          value={execution.minimumCommission ?? 0}
+          onChange={(event) =>
+            updateExecution({
+              minimumCommission: boundedNumber(
+                Number(event.target.value),
+                execution.minimumCommission ?? 0,
+                0,
+                1_000
+              )
+            })
+          }
+        />
+      </label>
+      <label>
+        最大成交占比（%）
+        <input
+          data-testid="participation-rate-input"
+          max={100}
+          min={0}
+          step={1}
+          type="number"
+          value={(execution.maxParticipationRate ?? 0.1) * 100}
+          onChange={(event) =>
+            updateExecution({
+              maxParticipationRate:
+                boundedNumber(
+                  Number(event.target.value),
+                  (execution.maxParticipationRate ?? 0.1) * 100,
+                  0,
+                  100
+                ) / 100
+            })
+          }
+        />
+      </label>
+      <label>
+        涨跌停阈值（%）
+        <input
+          data-testid="price-limit-input"
+          max={100}
+          min={0}
+          step={0.5}
+          type="number"
+          value={(execution.priceLimitThreshold ?? 0.1) * 100}
+          onChange={(event) =>
+            updateExecution({
+              priceLimitThreshold:
+                boundedNumber(
+                  Number(event.target.value),
+                  (execution.priceLimitThreshold ?? 0.1) * 100,
+                  0,
+                  100
+                ) / 100
+            })
+          }
+        />
+      </label>
+    </div>
   );
 }
 
@@ -688,6 +843,13 @@ function BaseStrategyEditor({
       </Section>
 
       <Section
+        title="成交模型"
+        action={<span className="section-note">T+1 · 单笔佣金 · 成交约束</span>}
+      >
+        <ExecutionSettingsControls config={config} onChange={onChange} />
+      </Section>
+
+      <Section
         title="ETF 池"
         action={<span className="section-note">{config.universe.length} 个已选</span>}
       >
@@ -1067,6 +1229,13 @@ function CompositeStrategyEditor({
             />
           </label>
         </div>
+      </Section>
+
+      <Section
+        title="组合层成交模型"
+        action={<span className="section-note">组合再平衡成本</span>}
+      >
+        <ExecutionSettingsControls config={config} onChange={onChange} />
       </Section>
 
       <Section

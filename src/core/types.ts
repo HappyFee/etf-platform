@@ -77,6 +77,10 @@ export interface RiskConfig {
 export interface ExecutionConfig {
   price: ExecutionPrice;
   slippageBps: number;
+  initialCapital?: number;
+  minimumCommission?: number;
+  maxParticipationRate?: number;
+  priceLimitThreshold?: number;
 }
 
 export interface BacktestSettings {
@@ -186,8 +190,13 @@ export interface RebalanceEvent {
   holdings: Holding[];
   rankings: EvaluationRow[];
   turnover: number;
+  tradedWeight?: number;
   costBps?: number;
   slippageBps?: number;
+  costRate?: number;
+  commissionAmount?: number;
+  fillRate?: number;
+  constraintCount?: number;
 }
 
 export interface BacktestMetrics {
@@ -246,6 +255,30 @@ export interface RobustnessReport {
   summary: string;
 }
 
+export interface ValidationSegment {
+  startDate: string;
+  endDate: string;
+  totalReturn: number;
+  annualizedReturn: number;
+  maxDrawdown: number;
+  sharpe: number;
+}
+
+export interface ValidationCheck {
+  label: string;
+  status: "pass" | "warn";
+  detail: string;
+}
+
+export interface ValidationReport {
+  splitDate: string;
+  inSample?: ValidationSegment;
+  outOfSample?: ValidationSegment;
+  status: "stable" | "mixed" | "weak" | "unavailable";
+  summary: string;
+  checks: ValidationCheck[];
+}
+
 export interface LatestSignal {
   date: string;
   holdings: Holding[];
@@ -259,5 +292,20 @@ export interface BacktestResult {
   metrics: BacktestMetrics;
   benchmark?: BenchmarkResult;
   latestSignal: LatestSignal;
+  warnings: string[];
+}
+
+export interface BacktestSnapshot {
+  version: 1;
+  id: string;
+  strategyId: string;
+  strategyName: string;
+  createdAt: string;
+  dataSource: string;
+  dataLatestDate: string;
+  config: StrategyConfig;
+  metrics: BacktestMetrics;
+  equityCurve: EquityPoint[];
+  benchmarkName?: string;
   warnings: string[];
 }

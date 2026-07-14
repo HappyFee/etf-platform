@@ -17,7 +17,8 @@ describe("account strategy storage", () => {
           name: "Account A rotation"
         }
       ],
-      activeStrategyId: defaultStrategy.id
+      activeStrategyId: defaultStrategy.id,
+      snapshots: []
     });
     saveAccountWorkspace(storage, "wechat-b", {
       strategies: [
@@ -26,7 +27,8 @@ describe("account strategy storage", () => {
           name: "Account B defensive"
         }
       ],
-      activeStrategyId: defensiveStrategy.id
+      activeStrategyId: defensiveStrategy.id,
+      snapshots: []
     });
 
     expect(loadAccountWorkspace(storage, "wechat-a")?.strategies[0].name).toBe(
@@ -43,5 +45,6 @@ describe("account strategy storage", () => {
 
     expect(workspace?.strategies).toEqual(defaultStrategies);
     expect(workspace?.activeStrategyId).toBe(defaultStrategy.id);
+    expect(workspace?.snapshots).toEqual([]);
   });
 });

@@ -15,6 +15,8 @@ describe("App", () => {
     expect(html).toContain("策略实验室");
     expect(html).toContain("因子库");
     expect(html).toContain("信号跟踪");
+    expect(html).toContain("样本外验证");
+    expect(html).toContain("回测档案");
     expect(html).toContain("aria-current=\"page\"");
   });
 
@@ -73,6 +75,10 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"benchmark-select\"");
     expect(html).toContain("data-testid=\"backtest-start-date\"");
     expect(html).toContain("data-testid=\"backtest-end-date\"");
+    expect(html).toContain("data-testid=\"execution-price-select\"");
+    expect(html).toContain("data-testid=\"minimum-commission-input\"");
+    expect(html).toContain("data-testid=\"participation-rate-input\"");
+    expect(html).toContain("data-testid=\"price-limit-input\"");
   });
 
   test("renders a visible notice when generated data fails to load", () => {

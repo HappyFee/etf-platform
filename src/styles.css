@@ -531,7 +531,7 @@ small {
 
 .diagnostic-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -577,6 +577,132 @@ small {
 
 .robustness-card small {
   line-height: 1.45;
+}
+
+.validation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+  gap: 20px;
+}
+
+.validation-periods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.validation-period {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+}
+
+.validation-period > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.validation-period > strong {
+  color: var(--accent-strong);
+  font-size: 24px;
+}
+
+.validation-period > small {
+  line-height: 1.5;
+}
+
+.validation-checks {
+  display: grid;
+  gap: 10px;
+}
+
+.validation-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid #edf2f4;
+}
+
+.validation-check:last-child {
+  border-bottom: 0;
+}
+
+.validation-check > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.validation-check--pass > svg {
+  color: var(--good);
+}
+
+.validation-check--warn > svg {
+  color: var(--warn);
+}
+
+.validation-status {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.validation-status--stable {
+  border-color: #b8dccf;
+  color: var(--good);
+  background: #edf8f5;
+}
+
+.validation-status--mixed,
+.validation-status--unavailable {
+  border-color: #ead8b5;
+  color: #805b16;
+  background: #fff7e8;
+}
+
+.validation-status--weak {
+  border-color: #e6bfc2;
+  color: var(--danger);
+  background: #fff3f3;
+}
+
+.validation-summary {
+  margin: 14px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.archive-actions,
+.archive-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.archive-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.archive-table {
+  min-width: 980px;
+}
+
+.archive-table td {
+  white-space: nowrap;
+}
+
+.archive-table td:first-child {
+  min-width: 170px;
+  white-space: normal;
 }
 
 .holdings-panel,
@@ -701,6 +827,10 @@ td small {
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
   gap: 14px;
+}
+
+.execution-grid {
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
 }
 
 .strategy-toolbar {
@@ -1020,7 +1150,8 @@ input[type="checkbox"] {
 
   .chart-grid,
   .signal-layout,
-  .diagnostic-grid {
+  .diagnostic-grid,
+  .validation-layout {
     grid-template-columns: 1fr;
   }
 
@@ -1108,9 +1239,10 @@ input[type="checkbox"] {
   .factor-groups,
   .assumption-list,
   .compact-metrics,
-  .quality-summary,
-  .robustness-grid,
-  .filter-row {
+    .quality-summary,
+    .robustness-grid,
+    .validation-periods,
+    .filter-row {
     grid-template-columns: 1fr;
   }
 
@@ -1133,5 +1265,10 @@ input[type="checkbox"] {
   .section-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .archive-actions {
+    justify-content: flex-start;
+    width: 100%;
   }
 }

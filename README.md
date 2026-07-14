@@ -18,7 +18,9 @@ The project can run as a static web app on GitHub Pages, Vercel, Netlify, or Clo
 - Equal-weight, score-weight, and fixed rank-based allocation
 - Risk constraints such as maximum single-position weight, minimum cash weight, and an optional idle-cash replacement ETF
 - Saved backtest date ranges and selectable ETF or universe-equal-weight benchmarks
-- Backtest diagnostics, benchmark comparison, data quality checks, and robustness stress tests
+- T+1 open/close execution with slippage, minimum commission, volume participation, and price-limit constraints
+- 70/30 out-of-sample validation, history-truncated signal replay, benchmark comparison, data quality checks, and robustness stress tests
+- Account-scoped backtest snapshots, side-by-side metric comparison, and JSON/CSV export
 - Latest signal tracking for follow-up decisions
 
 ## Stack
@@ -52,9 +54,9 @@ Open the URL printed by Vite.
 
 ## Accounts And WeChat Login
 
-The app stores each account's strategy workspace separately in browser `localStorage`. Different accounts keep independent strategy lists and active strategy selections. The default account is a local account.
+The app stores each account's strategy workspace separately in browser `localStorage`. Different accounts keep independent strategy lists, active strategy selections, and backtest snapshots. The default account is a local account.
 
-When Supabase is configured, users can sign in by email magic link and sync the workspace to the cloud. The account disclosure shows whether changes are saving, saved, or failed; rapid edits are grouped before the cloud write.
+When Supabase is configured, users can sign in by email magic link and sync strategies and backtest snapshots to the cloud. Snapshots reuse the existing `strategies` JSONB column, so no new table or SQL migration is required. The account disclosure shows whether changes are saving, saved, or failed; rapid edits are grouped before the cloud write.
 
 WeChat login has two modes:
 
@@ -128,10 +130,10 @@ A base strategy contains:
 - `filters`: pre-ranking rules such as liquidity thresholds or volatility ranges
 - `rebalance`: daily, weekly, or monthly schedule
 - `portfolio`: Top N, weighting method, and optional fixed rank weights
-- `transactionCostBps`: cost applied on turnover
+- `transactionCostBps`: one-way cost applied to actual traded notional
 - `benchmarkSymbol`: selected ETF benchmark, or the universe-equal-weight option
 - `backtestStartDate` / `backtestEndDate`: optional saved evaluation window
-- `execution`: price and slippage assumptions
+- `execution`: T+1 execution point, slippage, initial capital, minimum commission, volume participation, and price-limit threshold
 - `risk`: cash return, maximum position weight, minimum cash weight, and idle-cash replacement
 
 A composite strategy contains:

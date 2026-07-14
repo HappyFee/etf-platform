@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { buildDataQualityReport, buildRobustnessReport } from "./analysis";
+import {
+  buildDataQualityReport,
+  buildRobustnessReport,
+  buildValidationReport
+} from "./analysis";
 import { defaultStrategy } from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
 
@@ -24,5 +28,23 @@ describe("strategy diagnostics", () => {
     expect(report.cases.length).toBeGreaterThanOrEqual(3);
     expect(report.cases.every((item) => Number.isFinite(item.totalReturn))).toBe(true);
     expect(report.summary.length).toBeGreaterThan(0);
+  });
+
+  test("splits the configured period into in-sample and out-of-sample validation", () => {
+    const report = buildValidationReport({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: defaultStrategy,
+      strategyBook: [defaultStrategy]
+    });
+
+    expect(report.splitDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(report.inSample!.endDate < report.outOfSample!.startDate).toBe(true);
+    expect(["stable", "mixed", "weak"]).toContain(report.status);
+    expect(report.checks.find((check) => check.label === "信号与成交分离")?.status)
+      .toBe("pass");
+    expect(report.checks.find((check) => check.label === "历史截断重放")?.status)
+      .toBe("pass");
+    expect(report.checks.some((check) => check.status === "warn")).toBe(true);
   });
 });

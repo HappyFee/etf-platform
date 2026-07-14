@@ -68,7 +68,19 @@ async function runSmoke() {
       throw new Error(`Expected strategy lab controls, found ${controls}`);
     }
 
-    console.log(`Smoke test passed: ${chartCount} charts and ${controls} lab controls rendered.`);
+    await page.locator('[data-testid="minimum-commission-input"]').waitFor();
+    await page.locator('[data-testid="participation-rate-input"]').waitFor();
+
+    await page.getByRole("button", { name: "策略总览" }).click();
+    await page.getByRole("button", { name: "保存快照" }).click();
+    const snapshotCount = await page.locator(".archive-table tbody tr").count();
+    if (snapshotCount < 1) {
+      throw new Error("Expected a saved backtest snapshot");
+    }
+
+    console.log(
+      `Smoke test passed: ${chartCount} charts, ${controls} lab controls, and ${snapshotCount} saved snapshot rendered.`
+    );
   } finally {
     await browser?.close();
     await closePreview(server);

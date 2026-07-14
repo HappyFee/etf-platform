@@ -144,6 +144,151 @@ describe("backtest engine", () => {
     expect(curvePoint.dailyReturn).toBeLessThan(0);
   });
 
+  test("applies minimum commission per filled order", () => {
+    const freeResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        transactionCostBps: 0,
+        execution: {
+          price: "next_close",
+          slippageBps: 0,
+          initialCapital: 10_000,
+          minimumCommission: 0,
+          maxParticipationRate: 0,
+          priceLimitThreshold: 0
+        }
+      }
+    });
+    const commissionedResult = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        transactionCostBps: 0,
+        execution: {
+          price: "next_close",
+          slippageBps: 0,
+          initialCapital: 10_000,
+          minimumCommission: 5,
+          maxParticipationRate: 0,
+          priceLimitThreshold: 0
+        }
+      }
+    });
+
+    expect(commissionedResult.rebalances.some((event) => (event.commissionAmount ?? 0) > 0))
+      .toBe(true);
+    expect(commissionedResult.metrics.totalReturn).toBeLessThan(
+      freeResult.metrics.totalReturn
+    );
+  });
+
+  test("limits fills when an order exceeds configured market participation", () => {
+    const constrainedBars = marketBars.map((bar) => ({
+      ...bar,
+      amount: 1_000_000
+    }));
+    const result = runBacktest({
+      bars: constrainedBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        transactionCostBps: 0,
+        execution: {
+          price: "next_close",
+          slippageBps: 0,
+          initialCapital: 100_000,
+          minimumCommission: 0,
+          maxParticipationRate: 0.01,
+          priceLimitThreshold: 0
+        }
+      }
+    });
+
+    expect(result.rebalances.some((event) => (event.fillRate ?? 1) < 1)).toBe(true);
+    expect(result.rebalances.some((event) => (event.constraintCount ?? 0) > 0)).toBe(true);
+    expect(result.warnings.some((warning) => warning.includes("成交额参与率"))).toBe(true);
+  });
+
+  test("blocks a buy when the execution bar is locked at the configured price limit", () => {
+    const baseline = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        execution: {
+          price: "next_close",
+          slippageBps: 0,
+          initialCapital: 100_000,
+          minimumCommission: 0,
+          maxParticipationRate: 0,
+          priceLimitThreshold: 0
+        }
+      }
+    });
+    const firstTrade = baseline.rebalances.find((event) => event.holdings.length > 0)!;
+    const symbol = firstTrade.holdings[0].symbol;
+    const dates = [...new Set(marketBars.map((bar) => bar.date))].sort();
+    const tradeIndex = dates.indexOf(firstTrade.date);
+    const previousDate = dates[tradeIndex - 1];
+    const previousClose = marketBars.find(
+      (bar) => bar.symbol === symbol && bar.date === previousDate
+    )!.close;
+    const limitPrice = previousClose * 1.1;
+    const lockedBars = marketBars.map((bar) =>
+      bar.symbol === symbol && bar.date === firstTrade.date
+        ? {
+            ...bar,
+            open: limitPrice,
+            high: limitPrice,
+            low: limitPrice,
+            close: limitPrice
+          }
+        : bar
+    );
+    const result = runBacktest({
+      bars: lockedBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        transactionCostBps: 0,
+        execution: {
+          price: "next_close",
+          slippageBps: 0,
+          initialCapital: 100_000,
+          minimumCommission: 0,
+          maxParticipationRate: 0,
+          priceLimitThreshold: 0.1
+        }
+      }
+    });
+
+    expect(result.warnings.some((warning) => warning.includes("涨跌停约束"))).toBe(true);
+    expect(result.rebalances.some((event) => (event.constraintCount ?? 0) > 0)).toBe(true);
+  });
+
+  test("supports next-open execution with overnight and intraday returns", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        execution: {
+          ...defaultStrategy.execution!,
+          price: "next_open",
+          maxParticipationRate: 0,
+          priceLimitThreshold: 0
+        }
+      }
+    });
+
+    expect(result.rebalances.length).toBeGreaterThan(0);
+    expect(result.latestSignal.nextRebalanceHint).toContain("开盘");
+    expect(result.equityCurve.every((point) => Number.isFinite(point.equity))).toBe(true);
+  });
+
   test("supports a saved backtest date range without losing factor warmup history", () => {
     const dates = [...new Set(marketBars.map((bar) => bar.date))].sort();
     const startDate = dates[Math.floor(dates.length * 0.65)];
@@ -360,6 +505,11 @@ describe("backtest engine", () => {
     expect(compositeResult.equityCurve.length).toBeGreaterThan(250);
     expect(compositeResult.latestSignal.date).toBe(marketBars.at(-1)!.date);
     expect(compositeResult.latestSignal.holdings.length).toBeGreaterThan(0);
+    expect(
+      compositeResult.rebalances.every(
+        (event) => event.signalDate && event.tradeDate && event.signalDate < event.tradeDate
+      )
+    ).toBe(true);
     expect(compositeResult.benchmark?.name).toContain("沪深300ETF");
     expect(compositeResult.metrics.benchmarkTotalReturn).toBeTypeOf("number");
     expect(compositeResult.metrics.totalReturn).toBeGreaterThan(

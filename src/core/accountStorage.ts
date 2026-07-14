@@ -1,5 +1,6 @@
 import { defaultStrategies, defaultStrategy } from "./defaultStrategy";
-import type { StrategyConfig } from "./types";
+import { isBacktestSnapshotList } from "./backtestArchive";
+import type { BacktestSnapshot, StrategyConfig } from "./types";
 
 const workspacePrefix = "etf-platform:workspace:";
 const activeAccountKey = "etf-platform:active-account";
@@ -14,6 +15,7 @@ export interface AccountProfile {
 export interface AccountWorkspace {
   strategies: StrategyConfig[];
   activeStrategyId: string;
+  snapshots: BacktestSnapshot[];
 }
 
 export interface StorageLike {
@@ -45,7 +47,8 @@ function cloneStrategy<T extends StrategyConfig>(strategy: T): T {
 function defaultWorkspace(): AccountWorkspace {
   return {
     strategies: defaultStrategies.map(cloneStrategy),
-    activeStrategyId: defaultStrategy.id
+    activeStrategyId: defaultStrategy.id,
+    snapshots: []
   };
 }
 
@@ -89,7 +92,8 @@ export function loadAccountWorkspace(
 
     return {
       strategies: parsed.strategies,
-      activeStrategyId
+      activeStrategyId,
+      snapshots: isBacktestSnapshotList(parsed.snapshots) ? parsed.snapshots : []
     };
   } catch {
     return fallback;

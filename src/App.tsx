@@ -12,15 +12,30 @@ import {
   MessageCircle,
   SlidersHorizontal
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { BacktestCharts } from "./components/BacktestCharts";
+import {
+  BacktestArchive,
+  type BacktestExportFormat
+} from "./components/BacktestArchive";
 import { Dashboard } from "./components/Dashboard";
 import { FactorLibrary } from "./components/FactorLibrary";
 import { SignalPanel } from "./components/SignalPanel";
 import { StrategyLab } from "./components/StrategyLab";
-import { buildDataQualityReport, buildRobustnessReport } from "./core/analysis";
+import {
+  buildDataQualityReport,
+  buildRobustnessReport,
+  buildValidationReport
+} from "./core/analysis";
 import { defaultStrategies, defaultStrategy, defaultCompositeStrategy } from "./core/defaultStrategy";
 import { runBacktest } from "./core/backtest";
+import {
+  createBacktestSnapshot,
+  prependBacktestSnapshot,
+  serializeSnapshotCsv,
+  serializeSnapshotJson,
+  snapshotFileStem
+} from "./core/backtestArchive";
 import { loadGeneratedDataset, sampleDataset } from "./core/dataSource";
 import {
   clearActiveAccount,
@@ -48,7 +63,12 @@ import {
   type SupabaseWorkspaceLoadClient,
   type SupabaseWorkspaceSaveClient
 } from "./core/supabaseAuth";
-import type { BaseStrategyConfig, CompositeStrategyConfig, StrategyConfig } from "./core/types";
+import type {
+  BacktestSnapshot,
+  BaseStrategyConfig,
+  CompositeStrategyConfig,
+  StrategyConfig
+} from "./core/types";
 
 type TabKey = "overview" | "lab" | "factors" | "signals";
 type DataLoadStatus = "loading" | "loaded" | "failed";
@@ -81,6 +101,27 @@ function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function downloadSnapshotFile(
+  snapshot: BacktestSnapshot,
+  format: BacktestExportFormat
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const content =
+    format === "json" ? serializeSnapshotJson(snapshot) : serializeSnapshotCsv(snapshot);
+  const blob = new Blob([content], {
+    type: format === "json" ? "application/json;charset=utf-8" : "text/csv;charset=utf-8"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${snapshotFileStem(snapshot)}.${format}`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function browserStorage(): StorageLike | null {
   if (typeof window === "undefined") {
     return null;
@@ -97,7 +138,8 @@ function initialWorkspace(storage: StorageLike | null, account: AccountProfile) 
     ? loadAccountWorkspace(storage, account.id)
     : {
         strategies: defaultStrategies.map(cloneStrategy),
-        activeStrategyId: defaultStrategy.id
+        activeStrategyId: defaultStrategy.id,
+        snapshots: []
       };
 }
 
@@ -247,6 +289,7 @@ export function App() {
     initial.strategies
   );
   const [activeStrategyId, setActiveStrategyId] = useState(initial.activeStrategyId);
+  const [snapshots, setSnapshots] = useState<BacktestSnapshot[]>(initial.snapshots);
   const [dataset, setDataset] = useState(sampleDataset);
   const [dataLoadStatus, setDataLoadStatus] = useState<DataLoadStatus>("loading");
   const [accountNotice, setAccountNotice] = useState<string | null>(null);
@@ -419,12 +462,13 @@ export function App() {
     saveActiveAccount(storage, account);
     saveAccountWorkspace(storage, account.id, {
       strategies,
-      activeStrategyId
+      activeStrategyId,
+      snapshots
     });
     if (account.provider !== "supabase") {
       setWorkspaceSaveStatus("saved");
     }
-  }, [account, activeStrategyId, storage, strategies]);
+  }, [account, activeStrategyId, snapshots, storage, strategies]);
 
   useEffect(() => {
     if (
@@ -445,7 +489,7 @@ export function App() {
           saveSupabaseWorkspace(
             supabase as unknown as SupabaseWorkspaceSaveClient,
             supabaseUserId,
-            { strategies, activeStrategyId }
+            { strategies, activeStrategyId, snapshots }
           )
         );
       cloudSaveQueue.current
@@ -467,7 +511,15 @@ export function App() {
       cancelled = true;
       window.clearTimeout(saveTimer);
     };
-  }, [account.provider, activeStrategyId, cloudWorkspaceUserId, strategies, supabase, supabaseUserId]);
+  }, [
+    account.provider,
+    activeStrategyId,
+    cloudWorkspaceUserId,
+    snapshots,
+    strategies,
+    supabase,
+    supabaseUserId
+  ]);
 
   const config = useMemo(
     () => strategies.find((strategy) => strategy.id === activeStrategyId) ?? strategies[0],
@@ -484,6 +536,18 @@ export function App() {
       }),
     [config, dataset, strategies]
   );
+  const deferredConfig = useDeferredValue(config);
+  const deferredStrategies = useDeferredValue(strategies);
+  const analysisResult = useMemo(
+    () =>
+      runBacktest({
+        bars: dataset.bars,
+        profiles: dataset.profiles,
+        config: deferredConfig,
+        strategyBook: deferredStrategies
+      }),
+    [dataset, deferredConfig, deferredStrategies]
+  );
   const dataLatestDate = dataset.latestDate ?? result.latestSignal.date;
   const dataQuality = useMemo(
     () => buildDataQualityReport(dataset.bars, dataset.profiles),
@@ -494,15 +558,28 @@ export function App() {
       buildRobustnessReport({
         bars: dataset.bars,
         profiles: dataset.profiles,
-        config,
-        strategyBook: strategies
+        config: deferredConfig,
+        strategyBook: deferredStrategies
       }),
-    [config, dataset, strategies]
+    [dataset, deferredConfig, deferredStrategies]
+  );
+  const validation = useMemo(
+    () =>
+      buildValidationReport({
+        bars: dataset.bars,
+        profiles: dataset.profiles,
+        config: deferredConfig,
+        strategyBook: deferredStrategies,
+        result: analysisResult
+      }),
+    [analysisResult, dataset, deferredConfig, deferredStrategies]
   );
   const isDemoDataset = dataset.source.startsWith("demo");
   const symbolCoverage =
     dataset.requestedSymbols?.length && dataset.succeededSymbols?.length
-      ? `${dataset.succeededSymbols.length}/${dataset.requestedSymbols.length}`
+      ? `${dataset.requestedSymbols.filter((symbol) =>
+          dataset.succeededSymbols?.includes(symbol)
+        ).length}/${dataset.requestedSymbols.length}`
       : `${dataset.profiles.length}`;
 
   async function activateSupabaseUser(user: SupabaseUserLike) {
@@ -538,6 +615,7 @@ export function App() {
     setAccount(nextAccount);
     setStrategies(nextWorkspace.strategies);
     setActiveStrategyId(nextWorkspace.activeStrategyId);
+    setSnapshots(nextWorkspace.snapshots);
     setActiveTab("lab");
     setCloudWorkspaceUserId(user.id);
     setSupabaseStatus("idle");
@@ -555,7 +633,8 @@ export function App() {
 
     saveAccountWorkspace(storage, account.id, {
       strategies,
-      activeStrategyId
+      activeStrategyId,
+      snapshots
     });
   }
 
@@ -569,6 +648,7 @@ export function App() {
     setAccount(nextAccount);
     setStrategies(nextWorkspace.strategies);
     setActiveStrategyId(nextWorkspace.activeStrategyId);
+    setSnapshots(nextWorkspace.snapshots);
     setActiveTab("lab");
     setWorkspaceSaveStatus("saved");
 
@@ -706,6 +786,37 @@ export function App() {
     setActiveStrategyId(remaining[0].id);
   }
 
+  function currentBacktestSnapshot(): BacktestSnapshot {
+    return createBacktestSnapshot({
+      id: uniqueId("snapshot"),
+      createdAt: new Date().toISOString(),
+      config,
+      result,
+      dataSource: dataset.source,
+      dataLatestDate
+    });
+  }
+
+  function saveCurrentBacktest() {
+    const snapshot = currentBacktestSnapshot();
+    setSnapshots((current) => prependBacktestSnapshot(current, snapshot));
+  }
+
+  function exportCurrentBacktest(format: BacktestExportFormat) {
+    downloadSnapshotFile(currentBacktestSnapshot(), format);
+  }
+
+  function exportSavedBacktest(
+    snapshot: BacktestSnapshot,
+    format: BacktestExportFormat
+  ) {
+    downloadSnapshotFile(snapshot, format);
+  }
+
+  function deleteBacktestSnapshot(snapshotId: string) {
+    setSnapshots((current) => current.filter((snapshot) => snapshot.id !== snapshotId));
+  }
+
   return (
     <main className="app-shell">
       <header className="top-band">
@@ -783,10 +894,20 @@ export function App() {
       <div className="workspace">
         {activeTab === "overview" && (
           <Dashboard
+            archive={
+              <BacktestArchive
+                onDelete={deleteBacktestSnapshot}
+                onExportCurrent={exportCurrentBacktest}
+                onExportSnapshot={exportSavedBacktest}
+                onSave={saveCurrentBacktest}
+                snapshots={snapshots}
+              />
+            }
             result={result}
             config={config}
             dataQuality={dataQuality}
             robustness={robustness}
+            validation={validation}
           >
             <BacktestCharts result={result} />
           </Dashboard>

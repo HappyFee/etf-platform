@@ -1,9 +1,11 @@
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
   BacktestResult,
   DataQualityReport,
   RobustnessReport,
-  StrategyConfig
+  StrategyConfig,
+  ValidationReport
 } from "../core/types";
 import { formatAmount, formatNumber, formatPercent, MetricTile, Section } from "./ui";
 import { SignalPanel } from "./SignalPanel";
@@ -35,17 +37,31 @@ function optionalNumber(value: number | undefined): string {
   return value === undefined ? "--" : formatNumber(value);
 }
 
+function validationStatusLabel(status: ValidationReport["status"]): string {
+  return status === "stable"
+    ? "稳定"
+    : status === "mixed"
+      ? "需观察"
+      : status === "weak"
+        ? "偏弱"
+        : "数据不足";
+}
+
 export function Dashboard({
   result,
   config,
   dataQuality,
   robustness,
+  validation,
+  archive,
   children
 }: {
   result: BacktestResult;
   config: StrategyConfig;
   dataQuality: DataQualityReport;
   robustness: RobustnessReport;
+  validation: ValidationReport;
+  archive: ReactNode;
   children: ReactNode;
 }) {
   const { metrics } = result;
@@ -53,6 +69,20 @@ export function Dashboard({
     .slice()
     .sort((left, right) => left.coverageRatio - right.coverageRatio)
     .slice(0, 6);
+  const constrainedRebalances = result.rebalances.filter(
+    (event) => (event.constraintCount ?? 0) > 0
+  ).length;
+  const averageFillRate =
+    result.rebalances.length === 0
+      ? 1
+      : result.rebalances.reduce(
+          (total, event) => total + (event.fillRate ?? 1),
+          0
+        ) / result.rebalances.length;
+  const totalCommission = result.rebalances.reduce(
+    (total, event) => total + (event.commissionAmount ?? 0),
+    0
+  );
 
   return (
     <div className="dashboard-layout">
@@ -106,6 +136,14 @@ export function Dashboard({
               成本：手续费 {config.transactionCostBps} bps + 滑点{" "}
               {config.execution?.slippageBps ?? 3} bps
             </span>
+            <span>
+              资金：{formatAmount(config.execution?.initialCapital ?? 100_000)}元 · 最低佣金{" "}
+              {config.execution?.minimumCommission ?? (config.kind === "composite" ? 0 : 5)}元
+            </span>
+            <span>
+              约束：成交占比 {formatPercent(config.execution?.maxParticipationRate ?? 0.1)} ·
+              涨跌停 {formatPercent(config.execution?.priceLimitThreshold ?? 0.1)}
+            </span>
             <span>缺失行情：该持仓按现金收益处理</span>
           </div>
         </Section>
@@ -129,7 +167,73 @@ export function Dashboard({
             </span>
           </div>
         </Section>
+
+        <Section title="成交质量" action={<span className="section-note">实际成交回放</span>}>
+          <div className="compact-metrics">
+            <span>
+              <small>累计佣金</small>
+              <strong>{formatAmount(totalCommission)}元</strong>
+            </span>
+            <span>
+              <small>平均成交率</small>
+              <strong>{formatPercent(averageFillRate)}</strong>
+            </span>
+            <span>
+              <small>受限调仓</small>
+              <strong>{constrainedRebalances}</strong>
+            </span>
+          </div>
+        </Section>
       </div>
+
+      <Section
+        title="样本外验证"
+        action={
+          <span className={`validation-status validation-status--${validation.status}`}>
+            {validationStatusLabel(validation.status)}
+          </span>
+        }
+      >
+        <div className="validation-layout">
+          <div className="validation-periods">
+            <div className="validation-period">
+              <span>样本内 70%</span>
+              <strong>{optionalPercent(validation.inSample?.annualizedReturn)}</strong>
+              <small>
+                {validation.inSample
+                  ? `${validation.inSample.startDate} 至 ${validation.inSample.endDate} · Sharpe ${formatNumber(validation.inSample.sharpe)} · 回撤 ${formatPercent(validation.inSample.maxDrawdown)}`
+                  : "暂无有效区间"}
+              </small>
+            </div>
+            <div className="validation-period">
+              <span>样本外 30%</span>
+              <strong>{optionalPercent(validation.outOfSample?.annualizedReturn)}</strong>
+              <small>
+                {validation.outOfSample
+                  ? `${validation.outOfSample.startDate} 至 ${validation.outOfSample.endDate} · Sharpe ${formatNumber(validation.outOfSample.sharpe)} · 回撤 ${formatPercent(validation.outOfSample.maxDrawdown)}`
+                  : "暂无有效区间"}
+              </small>
+            </div>
+          </div>
+          <div className="validation-checks">
+            {validation.checks.map((check) => {
+              const Icon = check.status === "pass" ? CheckCircle2 : AlertTriangle;
+              return (
+                <div className={`validation-check validation-check--${check.status}`} key={check.label}>
+                  <Icon size={17} />
+                  <span>
+                    <strong>{check.label}</strong>
+                    <small>{check.detail}</small>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <p className="validation-summary">{validation.summary}</p>
+      </Section>
+
+      {archive}
 
       <Section
         title="数据质量"
