@@ -5,6 +5,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -13,7 +14,7 @@ import {
   YAxis
 } from "recharts";
 import type { BacktestResult } from "../core/types";
-import { formatPercent } from "./ui";
+import { formatPercent, withCashHolding } from "./ui";
 
 const palette = ["#0f766e", "#2f6fbb", "#b7791f", "#1b7f47", "#8a4f7d"];
 
@@ -25,7 +26,10 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
     drawdown: Number((-point.drawdown * 100).toFixed(2))
   }));
 
-  const allocationData = result.latestSignal.holdings.map((holding, index) => ({
+  const displayHoldings = result.latestSignal.date
+    ? withCashHolding(result.latestSignal.holdings)
+    : [];
+  const allocationData = displayHoldings.map((holding, index) => ({
     name: holding.name,
     weight: Number((holding.weight * 100).toFixed(2)),
     color: palette[index % palette.length]
@@ -44,10 +48,18 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
               tick={{ fontSize: 12 }}
               width={44}
             />
+            <Legend
+              align="right"
+              height={28}
+              iconType="plainline"
+              verticalAlign="top"
+              wrapperStyle={{ fontSize: 12 }}
+            />
             <Tooltip formatter={(value) => formatPercent(Number(value) - 1, 1)} />
             <Line
               type="monotone"
               dataKey="equity"
+              name="策略净值"
               stroke="#0f766e"
               strokeWidth={2.4}
               dot={false}
@@ -55,6 +67,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
             <Line
               type="monotone"
               dataKey="benchmark"
+              name={result.benchmark?.name ?? "对比基准"}
               stroke="#8a4f7d"
               strokeWidth={1.8}
               strokeDasharray="5 5"

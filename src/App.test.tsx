@@ -2,6 +2,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import { AccountPanel, App, DataSourceNotice } from "./App";
 import { StrategyLab } from "./components/StrategyLab";
+import { SignalPanel } from "./components/SignalPanel";
 import { runBacktest } from "./core/backtest";
 import { defaultStrategies, defaultStrategy } from "./core/defaultStrategy";
 import { etfProfiles, marketBars } from "./core/sampleData";
@@ -14,6 +15,7 @@ describe("App", () => {
     expect(html).toContain("策略实验室");
     expect(html).toContain("因子库");
     expect(html).toContain("信号跟踪");
+    expect(html).toContain("aria-current=\"page\"");
   });
 
   test("renders configurable rebalance day, ETF search, and fixed rank weights", () => {
@@ -68,6 +70,9 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"max-position-input\"");
     expect(html).toContain("data-testid=\"min-cash-input\"");
     expect(html).toContain("data-testid=\"cash-replacement-select\"");
+    expect(html).toContain("data-testid=\"benchmark-select\"");
+    expect(html).toContain("data-testid=\"backtest-start-date\"");
+    expect(html).toContain("data-testid=\"backtest-end-date\"");
   });
 
   test("renders a visible notice when generated data fails to load", () => {
@@ -100,6 +105,7 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"account-panel\"");
     expect(html).toContain("微信用户 demo");
     expect(html).toContain("微信登录");
+    expect(html).toContain("已保存到本机");
   });
   test("renders Supabase email login controls when configured", () => {
     const html = renderToString(
@@ -124,5 +130,24 @@ describe("App", () => {
     expect(html).toContain("data-testid=\"supabase-email-input\"");
     expect(html).toContain("data-testid=\"supabase-login-button\"");
     expect(html).toContain("owner@example.com");
+  });
+
+  test("shows uninvested weight as cash in the signal view", () => {
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        risk: {
+          ...defaultStrategy.risk,
+          minCashWeight: 0.25,
+          cashReplacementSymbol: undefined
+        }
+      }
+    });
+    const html = renderToString(<SignalPanel result={result} />);
+
+    expect(html).toContain("现金");
+    expect(html).toContain("25%");
   });
 });

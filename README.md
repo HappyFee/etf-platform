@@ -16,7 +16,8 @@ The project can run as a static web app on GitHub Pages, Vercel, Netlify, or Clo
 - Configurable pre-ranking filters, including threshold and range filters
 - Daily, weekly, and monthly rebalance schedules with selected weekday or calendar day
 - Equal-weight, score-weight, and fixed rank-based allocation
-- Risk constraints such as maximum single-position weight and minimum cash weight
+- Risk constraints such as maximum single-position weight, minimum cash weight, and an optional idle-cash replacement ETF
+- Saved backtest date ranges and selectable ETF or universe-equal-weight benchmarks
 - Backtest diagnostics, benchmark comparison, data quality checks, and robustness stress tests
 - Latest signal tracking for follow-up decisions
 
@@ -52,6 +53,8 @@ Open the URL printed by Vite.
 ## Accounts And WeChat Login
 
 The app stores each account's strategy workspace separately in browser `localStorage`. Different accounts keep independent strategy lists and active strategy selections. The default account is a local account.
+
+When Supabase is configured, users can sign in by email magic link and sync the workspace to the cloud. The account disclosure shows whether changes are saving, saved, or failed; rapid edits are grouped before the cloud write.
 
 WeChat login has two modes:
 
@@ -126,13 +129,17 @@ A base strategy contains:
 - `rebalance`: daily, weekly, or monthly schedule
 - `portfolio`: Top N, weighting method, and optional fixed rank weights
 - `transactionCostBps`: cost applied on turnover
+- `benchmarkSymbol`: selected ETF benchmark, or the universe-equal-weight option
+- `backtestStartDate` / `backtestEndDate`: optional saved evaluation window
 - `execution`: price and slippage assumptions
-- `risk`: cash return, maximum position weight, and minimum cash weight
+- `risk`: cash return, maximum position weight, minimum cash weight, and idle-cash replacement
 
 A composite strategy contains:
 
 - `components`: existing strategy ids and target weights
 - `transactionCostBps`: optional wrapper-level cost assumption
+- `benchmarkSymbol`: composite-level comparison benchmark
+- `backtestStartDate` / `backtestEndDate`: optional composite evaluation window
 - `execution`: wrapper execution assumptions
 - `risk`: cash return assumption
 

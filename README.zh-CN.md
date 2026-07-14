@@ -16,7 +16,8 @@
 - 支持可配置的排序前筛选条件，包括阈值和区间筛选
 - 支持每日、每周、每月调仓，并可选择周几或每月几号
 - 支持等权、按分数加权和按排名固定比例分配
-- 支持最大单仓、最低现金比例等风控约束
+- 支持最大单仓、最低现金比例和可选空仓替代 ETF 等风控约束
+- 支持保存回测起止日期，并选择单只 ETF 或 ETF 池等权基准
 - 提供回测诊断、基准对比、数据质量检查和稳健性压力测试
 - 提供最新信号跟踪，便于后续人工决策
 
@@ -52,6 +53,8 @@ npm run dev
 ## 账号与微信登录
 
 平台会按账号保存策略工作区。不同账号的策略列表、当前选中策略会保存在浏览器 `localStorage` 中，互不覆盖。未登录时使用默认本地账号。
+
+配置 Supabase 后，可以使用邮箱魔法链接登录并把策略工作区同步到云端。账号面板会显示保存中、已保存或保存失败状态，连续编辑会先合并再写入云端。
 
 微信登录有两种模式：
 
@@ -126,13 +129,17 @@ python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.genera
 - `rebalance`：每日、每周或每月调仓规则
 - `portfolio`：Top N、仓位方式和可选的排名固定权重
 - `transactionCostBps`：按换手率计算的交易成本
+- `benchmarkSymbol`：选择单只 ETF 或 ETF 池等权作为对比基准
+- `backtestStartDate` / `backtestEndDate`：可选、可保存的回测区间
 - `execution`：成交价格和滑点假设
-- `risk`：现金收益、最大单仓和最低现金比例
+- `risk`：现金收益、最大单仓、最低现金比例和空仓替代标的
 
 组合策略包含：
 
 - `components`：已有策略 id 和目标权重
 - `transactionCostBps`：组合层面的可选成本假设
+- `benchmarkSymbol`：组合策略的对比基准
+- `backtestStartDate` / `backtestEndDate`：组合策略的可选回测区间
 - `execution`：组合层面的成交假设
 - `risk`：现金收益假设
 

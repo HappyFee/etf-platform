@@ -1,4 +1,26 @@
 import type { ReactNode } from "react";
+import type { Holding } from "../core/types";
+
+export function withCashHolding(holdings: Holding[]): Holding[] {
+  const investedWeight = holdings.reduce(
+    (total, holding) => total + Math.max(0, holding.weight),
+    0
+  );
+  const cashWeight = Math.max(0, 1 - investedWeight);
+
+  if (cashWeight <= 0.0001) {
+    return holdings;
+  }
+
+  return [
+    ...holdings,
+    {
+      symbol: "CASH",
+      name: "现金",
+      weight: cashWeight
+    }
+  ];
+}
 
 export function formatPercent(value: number, digits = 1): string {
   if (!Number.isFinite(value)) {

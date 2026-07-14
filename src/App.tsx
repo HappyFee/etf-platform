@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BarChart3,
   BellRing,
+  ChevronDown,
   Database,
   Layers3,
   LibraryBig,
@@ -11,7 +12,7 @@ import {
   MessageCircle,
   SlidersHorizontal
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BacktestCharts } from "./components/BacktestCharts";
 import { Dashboard } from "./components/Dashboard";
 import { FactorLibrary } from "./components/FactorLibrary";
@@ -52,6 +53,7 @@ import type { BaseStrategyConfig, CompositeStrategyConfig, StrategyConfig } from
 type TabKey = "overview" | "lab" | "factors" | "signals";
 type DataLoadStatus = "loading" | "loaded" | "failed";
 type SupabaseStatus = "idle" | "sending" | "sent" | "syncing";
+type WorkspaceSaveStatus = "saved" | "saving" | "error";
 
 const localAccount: AccountProfile = {
   id: "local-default",
@@ -130,7 +132,8 @@ export function AccountPanel({
   onSupabaseEmailChange = () => undefined,
   onSupabaseLogin = () => undefined,
   supabaseEmail = "",
-  supabaseStatus = "idle"
+  supabaseStatus = "idle",
+  workspaceSaveStatus = "saved"
 }: {
   account: AccountProfile;
   isOAuthConfigured: boolean;
@@ -142,6 +145,7 @@ export function AccountPanel({
   onSupabaseLogin?: () => void;
   supabaseEmail?: string;
   supabaseStatus?: SupabaseStatus;
+  workspaceSaveStatus?: WorkspaceSaveStatus;
 }) {
   const providerLabel =
     account.provider === "supabase"
@@ -162,66 +166,75 @@ export function AccountPanel({
         : supabaseStatus === "syncing"
           ? "同步中"
           : "邮箱登录";
+  const saveLabel =
+    workspaceSaveStatus === "saving"
+      ? "保存中..."
+      : workspaceSaveStatus === "error"
+        ? "保存失败"
+        : account.provider === "supabase"
+          ? "云端已保存"
+          : "已保存到本机";
 
   return (
-    <div className="account-panel" data-testid="account-panel">
-      <div className="account-panel__identity">
-        <span className="account-avatar">{avatarLabel}</span>
-        <span className="account-avatar">
-          {account.provider === "wechat" ? "微" : "本"}
+    <details className="account-panel" data-testid="account-panel">
+      <summary className="account-panel__summary">
+        <span className="account-panel__identity">
+          <span className="account-avatar">{avatarLabel}</span>
+          <span className="account-panel__name">
+            <strong>{account.displayName}</strong>
+            <small>
+              {providerLabel} · {saveLabel}
+            </small>
+          </span>
         </span>
-        <span>
-          <strong>{account.displayName}</strong>
-          <small>{providerLabel}</small>
-          <small>
-            {account.provider === "wechat"
-              ? isOAuthConfigured
-                ? "微信账号"
-                : "微信模拟账号"
-              : "本地账号"}
-          </small>
+        <span className="account-panel__toggle">
+          账号
+          <ChevronDown size={16} />
         </span>
-      </div>
-      <div className="account-panel__actions">
-        <button className="text-action" onClick={onWeChatLogin} type="button">
-          <MessageCircle size={16} />
-          微信登录
-        </button>
-        <button className="text-action" onClick={onLocalLogin} type="button">
-          本地账号
-        </button>
-        <button className="icon-action" onClick={onLogout} title="退出当前账号" type="button">
-          <LogOut size={16} />
-        </button>
-      </div>
-      <form
-        className="account-panel__auth"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSupabaseLogin();
-        }}
-      >
-        <label className="account-panel__email">
-          <Mail size={15} />
-          <input
-            data-testid="supabase-email-input"
-            disabled={!isSupabaseConfigured || supabaseBusy}
-            onChange={(event) => onSupabaseEmailChange(event.target.value)}
-            placeholder={isSupabaseConfigured ? "输入邮箱获取登录链接" : "未配置 Supabase"}
-            type="email"
-            value={supabaseEmail}
-          />
-        </label>
-        <button
-          className="text-action"
-          data-testid="supabase-login-button"
-          disabled={!isSupabaseConfigured || supabaseBusy}
-          type="submit"
+      </summary>
+      <div className="account-panel__body">
+        <div className="account-panel__actions">
+          <button className="text-action" onClick={onWeChatLogin} type="button">
+            <MessageCircle size={16} />
+            微信登录
+          </button>
+          <button className="text-action" onClick={onLocalLogin} type="button">
+            本地账号
+          </button>
+          <button className="icon-action" onClick={onLogout} title="退出当前账号" type="button">
+            <LogOut size={16} />
+          </button>
+        </div>
+        <form
+          className="account-panel__auth"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSupabaseLogin();
+          }}
         >
-          {supabaseButtonLabel}
-        </button>
-      </form>
-    </div>
+          <label className="account-panel__email">
+            <Mail size={15} />
+            <input
+              aria-label="邮箱地址"
+              data-testid="supabase-email-input"
+              disabled={!isSupabaseConfigured || supabaseBusy}
+              onChange={(event) => onSupabaseEmailChange(event.target.value)}
+              placeholder={isSupabaseConfigured ? "输入邮箱获取登录链接" : "未配置 Supabase"}
+              type="email"
+              value={supabaseEmail}
+            />
+          </label>
+          <button
+            className="text-action"
+            data-testid="supabase-login-button"
+            disabled={!isSupabaseConfigured || supabaseBusy}
+            type="submit"
+          >
+            {supabaseButtonLabel}
+          </button>
+        </form>
+      </div>
+    </details>
   );
 }
 
@@ -241,6 +254,9 @@ export function App() {
   const [supabaseStatus, setSupabaseStatus] = useState<SupabaseStatus>("idle");
   const [supabaseUserId, setSupabaseUserId] = useState<string | null>(null);
   const [cloudWorkspaceUserId, setCloudWorkspaceUserId] = useState<string | null>(null);
+  const [workspaceSaveStatus, setWorkspaceSaveStatus] =
+    useState<WorkspaceSaveStatus>("saved");
+  const cloudSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const generatedUrl = `${import.meta.env.BASE_URL}data/a-share-etf-bars.generated.json`;
   const weChatConfig = useMemo(
     () =>
@@ -405,6 +421,9 @@ export function App() {
       strategies,
       activeStrategyId
     });
+    if (account.provider !== "supabase") {
+      setWorkspaceSaveStatus("saved");
+    }
   }, [account, activeStrategyId, storage, strategies]);
 
   useEffect(() => {
@@ -418,18 +437,35 @@ export function App() {
     }
 
     let cancelled = false;
-    saveSupabaseWorkspace(supabase as unknown as SupabaseWorkspaceSaveClient, supabaseUserId, {
-      strategies,
-      activeStrategyId
-    }).catch((error: unknown) => {
-      if (cancelled) {
-        return;
-      }
-      setAccountNotice(error instanceof Error ? error.message : "Supabase 策略保存失败");
-    });
+    setWorkspaceSaveStatus("saving");
+    const saveTimer = window.setTimeout(() => {
+      cloudSaveQueue.current = cloudSaveQueue.current
+        .catch(() => undefined)
+        .then(() =>
+          saveSupabaseWorkspace(
+            supabase as unknown as SupabaseWorkspaceSaveClient,
+            supabaseUserId,
+            { strategies, activeStrategyId }
+          )
+        );
+      cloudSaveQueue.current
+        .then(() => {
+          if (!cancelled) {
+            setWorkspaceSaveStatus("saved");
+          }
+        })
+        .catch((error: unknown) => {
+          if (cancelled) {
+            return;
+          }
+          setWorkspaceSaveStatus("error");
+          setAccountNotice(error instanceof Error ? error.message : "Supabase 策略保存失败");
+        });
+    }, 600);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(saveTimer);
     };
   }, [account.provider, activeStrategyId, cloudWorkspaceUserId, strategies, supabase, supabaseUserId]);
 
@@ -476,6 +512,7 @@ export function App() {
 
     const nextAccount = accountFromSupabaseUser(user);
     setSupabaseStatus("syncing");
+    setWorkspaceSaveStatus("saving");
     setSupabaseUserId(user.id);
     setCloudWorkspaceUserId(null);
     if (user.email) {
@@ -533,6 +570,7 @@ export function App() {
     setStrategies(nextWorkspace.strategies);
     setActiveStrategyId(nextWorkspace.activeStrategyId);
     setActiveTab("lab");
+    setWorkspaceSaveStatus("saved");
 
     if (storage) {
       saveActiveAccount(storage, nextAccount);
@@ -687,8 +725,10 @@ export function App() {
                 <Database size={16} />
                 数据截至 {dataLatestDate}
               </span>
-              <span className="status-chip">{isDemoDataset ? "演示数据" : dataset.source}</span>
-              <span className="status-chip">ETF {symbolCoverage}</span>
+              <span className="status-chip status-chip--secondary">
+                {isDemoDataset ? "演示数据" : dataset.source}
+              </span>
+              <span className="status-chip status-chip--secondary">ETF {symbolCoverage}</span>
               <span className="status-chip">
                 <Layers3 size={16} />
                 {config.kind === "composite" ? "组合策略" : "基础策略"}
@@ -708,6 +748,7 @@ export function App() {
               onWeChatLogin={loginWithWeChat}
               supabaseEmail={supabaseEmail}
               supabaseStatus={supabaseStatus}
+              workspaceSaveStatus={workspaceSaveStatus}
             />
           </div>
         </div>
@@ -727,6 +768,7 @@ export function App() {
           return (
             <button
               className={activeTab === tab.key ? "tab-button active" : "tab-button"}
+              aria-current={activeTab === tab.key ? "page" : undefined}
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               type="button"

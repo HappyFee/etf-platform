@@ -5,7 +5,6 @@ import type {
   RobustnessReport,
   StrategyConfig
 } from "../core/types";
-import { nextRebalanceHint } from "../core/date";
 import { formatAmount, formatNumber, formatPercent, MetricTile, Section } from "./ui";
 import { SignalPanel } from "./SignalPanel";
 
@@ -13,7 +12,27 @@ function strategySummary(config: StrategyConfig, rebalanceCount: number): string
   if (config.kind === "composite") {
     return `组合策略 · ${config.components.length} 个子策略`;
   }
-  return `${nextRebalanceHint(config.rebalance)} · Top ${config.portfolio.topN} · ${rebalanceCount} 次成交`;
+  const rebalanceLabel =
+    config.rebalance.frequency === "daily"
+      ? "每日调仓"
+      : config.rebalance.frequency === "weekly"
+        ? `每周${["", "一", "二", "三", "四", "五"][config.rebalance.weeklyDay ?? 1]}调仓`
+        : `每月${config.rebalance.monthlyDay ?? 1}日调仓`;
+  return `${rebalanceLabel} · Top ${config.portfolio.topN} · ${rebalanceCount} 次成交`;
+}
+
+function backtestRange(result: BacktestResult): string {
+  const firstDate = result.equityCurve[0]?.date;
+  const latestDate = result.equityCurve.at(-1)?.date;
+  return firstDate && latestDate ? `${firstDate} 至 ${latestDate}` : "暂无有效区间";
+}
+
+function optionalPercent(value: number | undefined): string {
+  return value === undefined ? "--" : formatPercent(value);
+}
+
+function optionalNumber(value: number | undefined): string {
+  return value === undefined ? "--" : formatNumber(value);
 }
 
 export function Dashboard({
@@ -78,8 +97,9 @@ export function Dashboard({
       </Section>
 
       <div className="diagnostic-grid">
-        <Section title="回测口径" action={<span className="section-note">信号与成交分离</span>}>
+        <Section title="回测口径" action={<span className="section-note">{backtestRange(result)}</span>}>
           <div className="assumption-list">
+            <span>口径：信号与成交分离</span>
             <span>信号：调仓日收盘后生成</span>
             <span>成交：下一交易日收盘切仓</span>
             <span>
@@ -97,11 +117,11 @@ export function Dashboard({
           <div className="compact-metrics">
             <span>
               <small>基准累计</small>
-              <strong>{formatPercent(metrics.benchmarkTotalReturn ?? 0)}</strong>
+              <strong>{optionalPercent(metrics.benchmarkTotalReturn)}</strong>
             </span>
             <span>
               <small>信息比率</small>
-              <strong>{formatNumber(metrics.informationRatio ?? 0)}</strong>
+              <strong>{optionalNumber(metrics.informationRatio)}</strong>
             </span>
             <span>
               <small>平均换手</small>

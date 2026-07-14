@@ -1,4 +1,5 @@
 import { nextRebalanceHint, shouldRebalance } from "./date";
+import { defaultBenchmarkSymbol, universeEqualWeightBenchmark } from "./defaultStrategy";
 import { evaluateUniverse } from "./factors";
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import { groupBarsBySymbol } from "./sampleData";
@@ -35,6 +36,17 @@ interface PendingRebalance {
   tradeDate: string;
   holdings: Holding[];
   rankings: EvaluationRow[];
+}
+
+interface BenchmarkBuildResult {
+  benchmark: BenchmarkResult;
+  warning?: string;
+}
+
+interface BacktestRange {
+  dates: string[];
+  startIndex: number;
+  warnings: string[];
 }
 
 export interface CloseLookup {
@@ -355,10 +367,25 @@ function buildBenchmark(
   universe: string[],
   dates: string[],
   startIndex: number,
-  cashReturnAnnual: number
-): BenchmarkResult {
-  const symbols = universe.filter((symbol) => barsBySymbol.has(symbol));
+  cashReturnAnnual: number,
+  benchmarkSymbol?: string
+): BenchmarkBuildResult {
   const profileBySymbol = new Map(profiles.map((profile) => [profile.symbol, profile]));
+  const requestedSymbol = benchmarkSymbol ?? defaultBenchmarkSymbol;
+  const useUniverse = requestedSymbol === universeEqualWeightBenchmark;
+  const hasRequestedSymbol = barsBySymbol.has(requestedSymbol);
+  const symbols =
+    !useUniverse && hasRequestedSymbol
+      ? [requestedSymbol]
+      : universe.filter((symbol) => barsBySymbol.has(symbol));
+  const name =
+    !useUniverse && hasRequestedSymbol
+      ? `${profileBySymbol.get(requestedSymbol)?.name ?? requestedSymbol}（${requestedSymbol}）`
+      : "ETF池等权基准";
+  const warning =
+    !useUniverse && !hasRequestedSymbol
+      ? `基准 ${requestedSymbol} 缺少行情，已回退到 ETF 池等权基准。`
+      : undefined;
   const holdings: Holding[] = symbols.map((symbol) => ({
     symbol,
     name: profileBySymbol.get(symbol)?.name ?? symbol,
@@ -391,9 +418,12 @@ function buildBenchmark(
   }
 
   return {
-    name: "ETF池等权基准",
-    equityCurve: curve,
-    metrics: calculateMetrics(curve, [])
+    benchmark: {
+      name,
+      equityCurve: curve,
+      metrics: calculateMetrics(curve, [])
+    },
+    warning
   };
 }
 
@@ -420,28 +450,102 @@ function warmupLength(config: BaseStrategyConfig): number {
   return Math.max(30, ...factorWindows, ...filterWindows) + 2;
 }
 
+function resolveBacktestRange(allDates: string[], config: BaseStrategyConfig): BacktestRange {
+  const warnings: string[] = [];
+
+  if (
+    config.backtestStartDate &&
+    config.backtestEndDate &&
+    config.backtestStartDate > config.backtestEndDate
+  ) {
+    return {
+      dates: [],
+      startIndex: 0,
+      warnings: ["回测开始日期不能晚于结束日期。"]
+    };
+  }
+
+  const dates = config.backtestEndDate
+    ? allDates.filter((date) => date <= config.backtestEndDate!)
+    : allDates;
+
+  if (dates.length === 0) {
+    return {
+      dates,
+      startIndex: 0,
+      warnings: ["回测区间没有可用行情，请调整结束日期。"]
+    };
+  }
+
+  const warmupIndex = Math.min(warmupLength(config), Math.max(0, dates.length - 2));
+  let startIndex = warmupIndex;
+
+  if (config.backtestStartDate) {
+    const requestedStartIndex = dates.findIndex((date) => date >= config.backtestStartDate!);
+    if (requestedStartIndex < 0) {
+      return {
+        dates: [],
+        startIndex: 0,
+        warnings: ["回测区间没有可用行情，请调整开始日期。"]
+      };
+    }
+
+    startIndex = Math.max(warmupIndex, requestedStartIndex);
+    if (requestedStartIndex < warmupIndex) {
+      warnings.push(`因子需要预热，实际回测从 ${dates[startIndex]} 开始。`);
+    }
+  }
+
+  return { dates, startIndex, warnings };
+}
+
 function warningsFrom(...collections: string[][]): string[] {
   return [...new Set(collections.flat())];
+}
+
+function emptyBacktestResult(warnings: string[]): BacktestResult {
+  return {
+    equityCurve: [],
+    rebalances: [],
+    metrics: calculateMetrics([], []),
+    latestSignal: {
+      date: "",
+      holdings: [],
+      rankings: [],
+      nextRebalanceHint: "请先调整回测区间"
+    },
+    warnings
+  };
 }
 
 function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig }): BacktestResult {
   const barsBySymbol = groupBarsBySymbol(input.bars);
   const closeLookup = createCloseLookup(input.bars);
-  const dates = uniqueSortedDates(input.bars);
-  const startIndex = Math.min(warmupLength(input.config), Math.max(0, dates.length - 2));
+  const range = resolveBacktestRange(uniqueSortedDates(input.bars), input.config);
+  const { dates, startIndex } = range;
+
+  if (dates.length === 0 || startIndex >= dates.length) {
+    return emptyBacktestResult(range.warnings);
+  }
+
   const execution = defaultExecution(input.config);
-  const benchmark = buildBenchmark(
+  const benchmarkBuild = buildBenchmark(
     barsBySymbol,
     closeLookup,
     input.profiles,
     input.config.universe,
     dates,
     startIndex,
-    input.config.risk.cashReturnAnnual
+    input.config.risk.cashReturnAnnual,
+    input.config.benchmarkSymbol
   );
+  const benchmark = benchmarkBuild.benchmark;
   const curve: EquityPoint[] = [];
   const rebalances: RebalanceEvent[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...range.warnings];
+  if (benchmarkBuild.warning) {
+    warnings.push(benchmarkBuild.warning);
+  }
   let pendingRebalance: PendingRebalance | null = null;
   let holdings: Holding[] = [];
   let equity = 1;
@@ -653,10 +757,15 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
   }
 
   const childResults = components.map((component) => {
+    const childConfig = {
+      ...component.strategy,
+      backtestStartDate: input.config.backtestStartDate,
+      backtestEndDate: input.config.backtestEndDate
+    } as StrategyConfig;
     const result = runBacktest({
       bars: input.bars,
       profiles: input.profiles,
-      config: component.strategy,
+      config: childConfig,
       strategyBook: input.strategyBook
     });
     warnings.push(
@@ -726,10 +835,39 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
     filterValues: {}
   }));
 
+  const benchmarkUniverse = [
+    ...new Set(
+      components.flatMap((component) =>
+        isBaseStrategy(component.strategy) ? component.strategy.universe : []
+      )
+    )
+  ];
+  const benchmarkBuild = buildBenchmark(
+    groupBarsBySymbol(input.bars),
+    createCloseLookup(input.bars),
+    input.profiles,
+    benchmarkUniverse.length > 0
+      ? benchmarkUniverse
+      : input.profiles.map((profile) => profile.symbol),
+    commonDates,
+    0,
+    input.config.risk.cashReturnAnnual,
+    input.config.benchmarkSymbol
+  );
+  if (benchmarkBuild.warning) {
+    warnings.push(benchmarkBuild.warning);
+  }
+  const curveWithBenchmark = attachBenchmark(equityCurve, benchmarkBuild.benchmark);
+
   return {
-    equityCurve,
+    equityCurve: curveWithBenchmark,
     rebalances,
-    metrics: calculateMetrics(equityCurve, rebalances),
+    metrics: calculateMetrics(
+      curveWithBenchmark,
+      rebalances,
+      benchmarkBuild.benchmark.equityCurve
+    ),
+    benchmark: benchmarkBuild.benchmark,
     latestSignal: {
       date: equityCurve.at(-1)?.date ?? "",
       holdings: latestHoldings,

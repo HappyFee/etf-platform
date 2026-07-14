@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { createCloseLookup, runBacktest } from "./backtest";
-import { defaultCompositeStrategy, defaultStrategy, defensiveStrategy } from "./defaultStrategy";
+import {
+  defaultCompositeStrategy,
+  defaultStrategy,
+  defensiveStrategy,
+  universeEqualWeightBenchmark
+} from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
 
 describe("backtest engine", () => {
@@ -16,6 +21,7 @@ describe("backtest engine", () => {
     expect(result.metrics.totalReturn).toBeGreaterThan(-1);
     expect(result.metrics.maxDrawdown).toBeGreaterThanOrEqual(0);
     expect(result.benchmark?.equityCurve.length).toBe(result.equityCurve.length);
+    expect(result.benchmark?.name).toContain("沪深300ETF");
     expect(result.metrics.benchmarkTotalReturn).toBeTypeOf("number");
     expect(result.latestSignal.holdings.length).toBeLessThanOrEqual(
       defaultStrategy.portfolio.topN
@@ -136,6 +142,45 @@ describe("backtest engine", () => {
     expect(firstRebalance.costBps).toBe(1000);
     expect(firstRebalance.slippageBps).toBeGreaterThan(0);
     expect(curvePoint.dailyReturn).toBeLessThan(0);
+  });
+
+  test("supports a saved backtest date range without losing factor warmup history", () => {
+    const dates = [...new Set(marketBars.map((bar) => bar.date))].sort();
+    const startDate = dates[Math.floor(dates.length * 0.65)];
+    const endDate = dates[Math.floor(dates.length * 0.85)];
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        backtestStartDate: startDate,
+        backtestEndDate: endDate
+      }
+    });
+
+    expect(result.equityCurve.length).toBeGreaterThan(20);
+    expect(result.equityCurve[0].date >= startDate).toBe(true);
+    expect(result.equityCurve.at(-1)!.date <= endDate).toBe(true);
+    expect(result.latestSignal.date).toBe(result.equityCurve.at(-1)!.date);
+  });
+
+  test("supports a selected ETF benchmark and an explicit ETF-pool benchmark", () => {
+    const selected = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: { ...defaultStrategy, benchmarkSymbol: "511010" }
+    });
+    const equalWeight = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultStrategy,
+        benchmarkSymbol: universeEqualWeightBenchmark
+      }
+    });
+
+    expect(selected.benchmark?.name).toBe("国债ETF（511010）");
+    expect(equalWeight.benchmark?.name).toBe("ETF池等权基准");
   });
 
   test("applies configured transaction costs to composite strategies", () => {
@@ -315,11 +360,44 @@ describe("backtest engine", () => {
     expect(compositeResult.equityCurve.length).toBeGreaterThan(250);
     expect(compositeResult.latestSignal.date).toBe(marketBars.at(-1)!.date);
     expect(compositeResult.latestSignal.holdings.length).toBeGreaterThan(0);
+    expect(compositeResult.benchmark?.name).toContain("沪深300ETF");
+    expect(compositeResult.metrics.benchmarkTotalReturn).toBeTypeOf("number");
     expect(compositeResult.metrics.totalReturn).toBeGreaterThan(
       Math.min(baseResult.metrics.totalReturn, defensiveResult.metrics.totalReturn) - 0.1
     );
     expect(compositeResult.metrics.totalReturn).toBeLessThan(
       Math.max(baseResult.metrics.totalReturn, defensiveResult.metrics.totalReturn) + 0.1
+    );
+  });
+
+  test("lets the composite strategy own its evaluation window", () => {
+    const dates = [...new Set(marketBars.map((bar) => bar.date))].sort();
+    const childEndDate = dates[Math.floor(dates.length * 0.75)];
+    const rangedChild = {
+      ...defaultStrategy,
+      backtestEndDate: childEndDate
+    };
+    const fullComposite = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: defaultCompositeStrategy,
+      strategyBook: [rangedChild, defensiveStrategy, defaultCompositeStrategy]
+    });
+    const rangedComposite = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      config: {
+        ...defaultCompositeStrategy,
+        backtestStartDate: dates[Math.floor(dates.length * 0.65)],
+        backtestEndDate: childEndDate
+      },
+      strategyBook: [rangedChild, defensiveStrategy, defaultCompositeStrategy]
+    });
+
+    expect(fullComposite.latestSignal.date).toBe(marketBars.at(-1)!.date);
+    expect(rangedComposite.latestSignal.date <= childEndDate).toBe(true);
+    expect(rangedComposite.equityCurve[0].date >= dates[Math.floor(dates.length * 0.65)]).toBe(
+      true
     );
   });
 });

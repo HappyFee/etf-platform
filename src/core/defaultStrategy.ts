@@ -16,6 +16,8 @@ const defaultUniverse = [
 ];
 
 export const defaultCashReplacementSymbol = "511880";
+export const defaultBenchmarkSymbol = "510300";
+export const universeEqualWeightBenchmark = "__universe_equal_weight__";
 
 export const defaultStrategy: BaseStrategyConfig = {
   kind: "base",
@@ -84,6 +86,7 @@ export const defaultStrategy: BaseStrategyConfig = {
     fixedWeights: [0.4, 0.3, 0.3]
   },
   transactionCostBps: 6,
+  benchmarkSymbol: defaultBenchmarkSymbol,
   risk: {
     cashReturnAnnual: 0.015,
     cashReplacementSymbol: defaultCashReplacementSymbol
@@ -191,6 +194,7 @@ export const defaultCompositeStrategy: CompositeStrategyConfig = {
     { strategyId: growthStrategy.id, weight: 0.2 }
   ],
   transactionCostBps: 0,
+  benchmarkSymbol: defaultBenchmarkSymbol,
   risk: {
     cashReturnAnnual: 0.015
   }

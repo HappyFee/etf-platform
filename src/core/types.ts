@@ -79,7 +79,13 @@ export interface ExecutionConfig {
   slippageBps: number;
 }
 
-export interface BaseStrategyConfig {
+export interface BacktestSettings {
+  benchmarkSymbol?: string;
+  backtestStartDate?: string;
+  backtestEndDate?: string;
+}
+
+export interface BaseStrategyConfig extends BacktestSettings {
   kind: "base";
   id: string;
   name: string;
@@ -99,7 +105,7 @@ export interface StrategyComponent {
   weight: number;
 }
 
-export interface CompositeStrategyConfig {
+export interface CompositeStrategyConfig extends BacktestSettings {
   kind: "composite";
   id: string;
   name: string;

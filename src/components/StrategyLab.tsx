@@ -1,5 +1,9 @@
 import { Copy, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  defaultBenchmarkSymbol,
+  universeEqualWeightBenchmark
+} from "../core/defaultStrategy";
 import { factorCatalog, getFactorDisplayName } from "../core/factors";
 import type {
   BacktestResult,
@@ -26,6 +30,74 @@ function boundedNumber(
     return fallback;
   }
   return Math.min(max, Math.max(min, value));
+}
+
+function BacktestSettingsControls({
+  config,
+  profiles,
+  onChange
+}: {
+  config: StrategyConfig;
+  profiles: EtfProfile[];
+  onChange: (config: StrategyConfig) => void;
+}) {
+  const benchmarkSymbol = config.benchmarkSymbol ?? defaultBenchmarkSymbol;
+
+  return (
+    <>
+      <label>
+        对比基准
+        <select
+          data-testid="benchmark-select"
+          value={benchmarkSymbol}
+          onChange={(event) =>
+            onChange({ ...config, benchmarkSymbol: event.target.value })
+          }
+        >
+          <option value={universeEqualWeightBenchmark}>ETF 池等权</option>
+          {profiles.map((profile) => (
+            <option key={profile.symbol} value={profile.symbol}>
+              {profile.symbol} · {profile.name}
+            </option>
+          ))}
+          {benchmarkSymbol !== universeEqualWeightBenchmark &&
+            !profiles.some((profile) => profile.symbol === benchmarkSymbol) && (
+              <option value={benchmarkSymbol}>{benchmarkSymbol}</option>
+            )}
+        </select>
+      </label>
+      <label>
+        回测开始
+        <input
+          data-testid="backtest-start-date"
+          max={config.backtestEndDate}
+          type="date"
+          value={config.backtestStartDate ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...config,
+              backtestStartDate: event.target.value || undefined
+            })
+          }
+        />
+      </label>
+      <label>
+        回测结束
+        <input
+          data-testid="backtest-end-date"
+          min={config.backtestStartDate}
+          type="date"
+          value={config.backtestEndDate ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...config,
+              backtestEndDate: event.target.value || undefined
+            })
+          }
+        />
+      </label>
+    </>
+  );
 }
 
 function updateFactor(
@@ -339,6 +411,11 @@ function BaseStrategyEditor({
               onChange={(event) => onChange({ ...config, name: event.target.value })}
             />
           </label>
+          <BacktestSettingsControls
+            config={config}
+            onChange={onChange}
+            profiles={profiles}
+          />
           <label>
             调仓频率
             <select
@@ -617,6 +694,7 @@ function BaseStrategyEditor({
         <label className="etf-search">
           <Search size={16} />
           <input
+            aria-label="搜索 ETF"
             placeholder="输入 ETF 名称、代码、分类或跟踪指数"
             value={etfQuery}
             onChange={(event) => setEtfQuery(event.target.value)}
@@ -936,11 +1014,13 @@ function BaseStrategyEditor({
 
 function CompositeStrategyEditor({
   config,
+  profiles,
   strategies,
   result,
   onChange
 }: {
   config: CompositeStrategyConfig;
+  profiles: EtfProfile[];
   strategies: StrategyConfig[];
   result: BacktestResult;
   onChange: (config: StrategyConfig) => void;
@@ -961,6 +1041,11 @@ function CompositeStrategyEditor({
               onChange={(event) => onChange({ ...config, name: event.target.value })}
             />
           </label>
+          <BacktestSettingsControls
+            config={config}
+            onChange={onChange}
+            profiles={profiles}
+          />
           <label>
             交易成本 bps
             <input
@@ -1096,6 +1181,7 @@ export function StrategyLab({
         <CompositeStrategyEditor
           config={config}
           onChange={onChange}
+          profiles={profiles}
           result={result}
           strategies={strategies}
         />

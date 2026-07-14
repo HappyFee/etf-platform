@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { BacktestResult } from "../core/types";
-import { EmptyState, formatPercent, Section } from "./ui";
+import { EmptyState, formatPercent, Section, withCashHolding } from "./ui";
 
 export function SignalPanel({
   result,
@@ -10,6 +10,9 @@ export function SignalPanel({
   compact?: boolean;
 }) {
   const topRankings = result.latestSignal.rankings.slice(0, compact ? 6 : 12);
+  const displayHoldings = result.latestSignal.date
+    ? withCashHolding(result.latestSignal.holdings)
+    : [];
 
   return (
     <Section
@@ -19,11 +22,11 @@ export function SignalPanel({
       <div className="signal-layout">
         <div className="holdings-panel">
           <h3>当前持仓</h3>
-          {result.latestSignal.holdings.length === 0 ? (
+          {displayHoldings.length === 0 ? (
             <EmptyState>当前策略为空仓。</EmptyState>
           ) : (
             <div className="holding-list">
-              {result.latestSignal.holdings.map((holding) => (
+              {displayHoldings.map((holding) => (
                 <div className="holding-row" key={holding.symbol}>
                   <span>
                     <strong>{holding.name}</strong>
