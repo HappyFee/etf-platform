@@ -1,14 +1,16 @@
-import { Copy, Plus, Search, Trash2 } from "lucide-react";
+import { Copy, ListChecks, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   defaultBenchmarkSymbol,
   universeEqualWeightBenchmark
 } from "../core/defaultStrategy";
 import { factorCatalog, getFactorDisplayName } from "../core/factors";
+import { defaultDynamicUniverseConfig } from "../core/universeSelection";
 import type {
   BacktestResult,
   BaseStrategyConfig,
   CompositeStrategyConfig,
+  DynamicUniverseConfig,
   EtfProfile,
   ExecutionConfig,
   FactorDirection,
@@ -31,6 +33,10 @@ function boundedNumber(
     return fallback;
   }
   return Math.min(max, Math.max(min, value));
+}
+
+function formatAmount(value: number): string {
+  return `${(value / 100_000_000).toFixed(value >= 100_000_000 ? 1 : 2)} 亿`;
 }
 
 function BacktestSettingsControls({
@@ -539,6 +545,24 @@ function BaseStrategyEditor({
     config.portfolio.fixedWeights ?? [],
     config.portfolio.topN
   );
+  const dynamicUniverse: DynamicUniverseConfig = {
+    ...defaultDynamicUniverseConfig,
+    ...config.universeSelection,
+    mode: config.universeSelection?.mode ?? "fixed"
+  };
+  const dynamicMode = dynamicUniverse.mode === "dynamic";
+  const latestUniverse = result.latestSignal.universe;
+  const recentUniverseHistory = [...(result.universeHistory ?? [])].slice(-6).reverse();
+
+  function updateDynamicUniverse(patch: Partial<DynamicUniverseConfig>) {
+    onChange({
+      ...config,
+      universeSelection: {
+        ...dynamicUniverse,
+        ...patch
+      }
+    });
+  }
   const etfMatches = useMemo(() => {
     const query = etfQuery.trim().toLowerCase();
 
@@ -851,44 +875,302 @@ function BaseStrategyEditor({
 
       <Section
         title="ETF 池"
-        action={<span className="section-note">{config.universe.length} 个已选</span>}
+        action={
+          <span className="section-note">
+            {dynamicMode ? latestUniverse?.selected.length ?? 0 : config.universe.length} 个已选
+          </span>
+        }
       >
-        <label className="etf-search">
-          <Search size={16} />
-          <input
-            aria-label="搜索 ETF"
-            placeholder="输入 ETF 名称、代码、分类或跟踪指数"
-            value={etfQuery}
-            onChange={(event) => setEtfQuery(event.target.value)}
-          />
-        </label>
-        <div className="universe-grid">
-          {etfMatches.map((profile) => {
-            const checked = config.universe.includes(profile.symbol);
-            return (
-              <label className={checked ? "etf-option checked" : "etf-option"} key={profile.symbol}>
-                <input
-                  checked={checked}
-                  onChange={() => {
-                    const universe = checked
-                      ? config.universe.filter((symbol) => symbol !== profile.symbol)
-                      : [...config.universe, profile.symbol];
-                    onChange({ ...config, universe });
-                  }}
-                  type="checkbox"
-                />
-                <span>
-                  <strong>{profile.name}</strong>
-                  <small>
-                    {profile.symbol} · {profile.category}
-                  </small>
-                </span>
-              </label>
-            );
-          })}
+        <div className="segmented-control" aria-label="ETF 池模式" role="group">
+          <button
+            className={!dynamicMode ? "active" : ""}
+            data-testid="fixed-universe-mode"
+            onClick={() => updateDynamicUniverse({ mode: "fixed" })}
+            type="button"
+          >
+            <ListChecks size={16} />
+            固定池
+          </button>
+          <button
+            className={dynamicMode ? "active" : ""}
+            data-testid="dynamic-universe-mode"
+            onClick={() => updateDynamicUniverse({ mode: "dynamic" })}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            动态池
+          </button>
         </div>
-        {etfMatches.length === 0 && (
-          <div className="empty-state">没有匹配的 ETF</div>
+
+        {!dynamicMode && (
+          <>
+            <label className="etf-search">
+              <Search size={16} />
+              <input
+                aria-label="搜索 ETF"
+                placeholder="输入 ETF 名称、代码、分类或跟踪指数"
+                value={etfQuery}
+                onChange={(event) => setEtfQuery(event.target.value)}
+              />
+            </label>
+            <div className="universe-grid">
+              {etfMatches.map((profile) => {
+                const checked = config.universe.includes(profile.symbol);
+                return (
+                  <label
+                    className={checked ? "etf-option checked" : "etf-option"}
+                    key={profile.symbol}
+                  >
+                    <input
+                      checked={checked}
+                      onChange={() => {
+                        const universe = checked
+                          ? config.universe.filter((symbol) => symbol !== profile.symbol)
+                          : [...config.universe, profile.symbol];
+                        onChange({ ...config, universe });
+                      }}
+                      type="checkbox"
+                    />
+                    <span>
+                      <strong>{profile.name}</strong>
+                      <small>
+                        {profile.symbol} · {profile.category}
+                      </small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {etfMatches.length === 0 && <div className="empty-state">没有匹配的 ETF</div>}
+          </>
+        )}
+
+        {dynamicMode && (
+          <div className="dynamic-universe-panel">
+            <div className="control-grid dynamic-universe-controls">
+              <label>
+                最短历史天数
+                <input
+                  data-testid="universe-min-history"
+                  min={20}
+                  step={10}
+                  type="number"
+                  value={dynamicUniverse.minimumHistoryDays}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      minimumHistoryDays: boundedNumber(
+                        Number(event.target.value),
+                        dynamicUniverse.minimumHistoryDays,
+                        20,
+                        1000
+                      )
+                    })
+                  }
+                />
+              </label>
+              <label>
+                完整性窗口
+                <input
+                  min={20}
+                  step={10}
+                  type="number"
+                  value={dynamicUniverse.coverageLookbackDays}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      coverageLookbackDays: boundedNumber(
+                        Number(event.target.value),
+                        dynamicUniverse.coverageLookbackDays,
+                        20,
+                        1000
+                      )
+                    })
+                  }
+                />
+              </label>
+              <label>
+                最低完整率
+                <input
+                  max={100}
+                  min={50}
+                  step={1}
+                  type="number"
+                  value={Math.round(dynamicUniverse.minimumCoverageRatio * 100)}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      minimumCoverageRatio:
+                        boundedNumber(
+                          Number(event.target.value),
+                          dynamicUniverse.minimumCoverageRatio * 100,
+                          50,
+                          100
+                        ) / 100
+                    })
+                  }
+                />
+              </label>
+              <label>
+                流动性窗口
+                <input
+                  min={5}
+                  step={5}
+                  type="number"
+                  value={dynamicUniverse.liquidityLookbackDays}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      liquidityLookbackDays: boundedNumber(
+                        Number(event.target.value),
+                        dynamicUniverse.liquidityLookbackDays,
+                        5,
+                        250
+                      )
+                    })
+                  }
+                />
+              </label>
+              <label>
+                最低成交额（亿）
+                <input
+                  data-testid="universe-min-amount"
+                  min={0}
+                  step={0.1}
+                  type="number"
+                  value={dynamicUniverse.minimumMedianAmount / 100_000_000}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      minimumMedianAmount:
+                        boundedNumber(
+                          Number(event.target.value),
+                          dynamicUniverse.minimumMedianAmount / 100_000_000,
+                          0,
+                          1000
+                        ) * 100_000_000
+                    })
+                  }
+                />
+              </label>
+              <label>
+                池子上限
+                <input
+                  max={100}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={dynamicUniverse.maximumSymbols}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      maximumSymbols: boundedNumber(
+                        Number(event.target.value),
+                        dynamicUniverse.maximumSymbols,
+                        1,
+                        100
+                      )
+                    })
+                  }
+                />
+              </label>
+              <label>
+                单类上限
+                <input
+                  max={20}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={dynamicUniverse.maximumPerCategory}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      maximumPerCategory: boundedNumber(
+                        Number(event.target.value),
+                        dynamicUniverse.maximumPerCategory,
+                        1,
+                        20
+                      )
+                    })
+                  }
+                />
+              </label>
+              <label>
+                替换优势（%）
+                <input
+                  max={200}
+                  min={0}
+                  step={5}
+                  type="number"
+                  value={Math.round(dynamicUniverse.retentionBufferRatio * 100)}
+                  onChange={(event) =>
+                    updateDynamicUniverse({
+                      retentionBufferRatio:
+                        boundedNumber(
+                          Number(event.target.value),
+                          dynamicUniverse.retentionBufferRatio * 100,
+                          0,
+                          200
+                        ) / 100
+                    })
+                  }
+                />
+              </label>
+            </div>
+
+            {latestUniverse && latestUniverse.selected.length > 0 ? (
+              <div className="table-wrap dynamic-universe-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ETF</th>
+                      <th>分类 / 跟踪标的</th>
+                      <th>成交额中位数</th>
+                      <th>数据完整率</th>
+                      <th>入池原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latestUniverse.selected.map((member) => (
+                      <tr key={member.symbol}>
+                        <td>
+                          <strong>{member.name}</strong>
+                          <small>{member.symbol}</small>
+                        </td>
+                        <td>
+                          <strong>{member.category}</strong>
+                          <small>{member.trackingIndex}</small>
+                        </td>
+                        <td>{formatAmount(member.medianAmount)}</td>
+                        <td>{formatPercent(member.coverageRatio)}</td>
+                        <td>{member.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty-state">当前没有符合条件的 ETF</div>
+            )}
+
+            {recentUniverseHistory.length > 0 && (
+              <div className="table-wrap universe-history-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>选池日期</th>
+                      <th>数量</th>
+                      <th>新增</th>
+                      <th>移除</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentUniverseHistory.map((record) => (
+                      <tr key={record.date}>
+                        <td>{record.date}</td>
+                        <td>{record.selected.length}</td>
+                        <td>{record.added.join("、") || "-"}</td>
+                        <td>{record.removed.join("、") || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
       </Section>
 

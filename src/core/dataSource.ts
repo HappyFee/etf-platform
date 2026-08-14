@@ -1,6 +1,10 @@
 import { etfProfiles, marketBars } from "./sampleData";
 import { defaultCashReplacementSymbol } from "./defaultStrategy";
-import type { EtfProfile, MarketBar } from "./types";
+import type {
+  EtfProfile,
+  MarketBar,
+  UniverseMembershipSnapshot
+} from "./types";
 
 export interface MarketDataset {
   source: string;
@@ -9,6 +13,7 @@ export interface MarketDataset {
   requestedSymbols?: string[];
   succeededSymbols?: string[];
   failedSymbols?: Record<string, string>;
+  universeSnapshots?: UniverseMembershipSnapshot[];
   profiles: EtfProfile[];
   bars: MarketBar[];
 }
@@ -20,6 +25,7 @@ interface GeneratedPayload {
   requestedSymbols?: unknown;
   succeededSymbols?: unknown;
   failedSymbols?: unknown;
+  universeSnapshots?: unknown;
   profiles?: unknown;
   bars?: unknown;
 }
@@ -31,6 +37,12 @@ export const sampleDataset: MarketDataset = {
   requestedSymbols: etfProfiles.map((profile) => profile.symbol),
   succeededSymbols: etfProfiles.map((profile) => profile.symbol),
   failedSymbols: {},
+  universeSnapshots: [
+    {
+      date: marketBars[0]?.date ?? "2021-01-04",
+      symbols: etfProfiles.map((profile) => profile.symbol)
+    }
+  ],
   profiles: etfProfiles,
   bars: marketBars
 };
@@ -48,7 +60,10 @@ function isProfile(value: unknown): value is EtfProfile {
     (item.exchange === "SH" || item.exchange === "SZ") &&
     typeof item.category === "string" &&
     typeof item.trackingIndex === "string" &&
-    typeof item.expenseRatio === "number"
+    typeof item.expenseRatio === "number" &&
+    (item.listedDate === undefined || typeof item.listedDate === "string") &&
+    (item.assetSize === undefined || typeof item.assetSize === "number") &&
+    (item.discoveredAt === undefined || typeof item.discoveredAt === "string")
   );
 }
 
@@ -85,6 +100,25 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
         typeof entry[0] === "string" && typeof entry[1] === "string"
     )
   );
+}
+
+function membershipSnapshots(value: unknown): UniverseMembershipSnapshot[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const snapshots = value.filter((item): item is UniverseMembershipSnapshot => {
+    const snapshot = item as Partial<UniverseMembershipSnapshot>;
+    return (
+      typeof snapshot?.date === "string" &&
+      Array.isArray(snapshot.symbols) &&
+      snapshot.symbols.every((symbol) => typeof symbol === "string")
+    );
+  });
+
+  return snapshots.length > 0
+    ? snapshots.sort((left, right) => left.date.localeCompare(right.date))
+    : undefined;
 }
 
 function uniqueSortedDates(bars: MarketBar[]): string[] {
@@ -204,6 +238,7 @@ export async function loadGeneratedDataset(
       requestedSymbols: stringArray(payload.requestedSymbols),
       succeededSymbols: supplementedSucceededSymbols,
       failedSymbols: stringRecord(payload.failedSymbols),
+      universeSnapshots: membershipSnapshots(payload.universeSnapshots),
       profiles,
       bars
     };

@@ -532,7 +532,8 @@ export function App() {
         bars: dataset.bars,
         profiles: dataset.profiles,
         config,
-        strategyBook: strategies
+        strategyBook: strategies,
+        universeSnapshots: dataset.universeSnapshots
       }),
     [config, dataset, strategies]
   );
@@ -544,7 +545,8 @@ export function App() {
         bars: dataset.bars,
         profiles: dataset.profiles,
         config: deferredConfig,
-        strategyBook: deferredStrategies
+        strategyBook: deferredStrategies,
+        universeSnapshots: dataset.universeSnapshots
       }),
     [dataset, deferredConfig, deferredStrategies]
   );
@@ -559,7 +561,8 @@ export function App() {
         bars: dataset.bars,
         profiles: dataset.profiles,
         config: deferredConfig,
-        strategyBook: deferredStrategies
+        strategyBook: deferredStrategies,
+        universeSnapshots: dataset.universeSnapshots
       }),
     [dataset, deferredConfig, deferredStrategies]
   );
@@ -570,6 +573,7 @@ export function App() {
         profiles: dataset.profiles,
         config: deferredConfig,
         strategyBook: deferredStrategies,
+        universeSnapshots: dataset.universeSnapshots,
         result: analysisResult
       }),
     [analysisResult, dataset, deferredConfig, deferredStrategies]

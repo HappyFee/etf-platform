@@ -8,7 +8,8 @@ The project can run as a static web app on GitHub Pages, Vercel, Netlify, or Clo
 
 ## Features
 
-- Configurable ETF universe with search by code, name, category, or tracked index
+- Fixed ETF universes plus monthly dynamic selection by history, data coverage, recent median turnover, and category caps
+- Same-exposure deduplication and retention buffers to reduce unnecessary switching between similar ETFs
 - Multiple user-defined base strategies
 - Composite strategies that combine existing strategies by weight
 - Parameterized factor instances, including momentum, trend, volatility, drawdown, and liquidity factors
@@ -114,10 +115,12 @@ To fetch real ETF daily bars:
 
 ```bash
 python -m pip install akshare pandas curl_cffi
-python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.generated.json
+python scripts/fetch-akshare-etf.py --discover --discover-limit 60 --full-refresh
 ```
 
-The included GitHub Actions workflow can refresh the generated JSON on trading days.
+`--discover` builds a broad mother pool from the current AkShare ETF market snapshot. It keeps the default symbols and prior members that remain inside a liquidity buffer, then records every membership change in `universeSnapshots`. Backtests select from the membership known at each date. The included GitHub Actions workflow uses `--full-refresh` on trading days so forward-adjusted prices cannot mix adjustment bases; a failed symbol keeps its previous history.
+
+Real membership history starts accumulating on the first discovery run. Earlier periods are reconstructed from symbols visible in the data file and produce an explicit survivorship-bias warning.
 
 ## Strategy Configuration
 
@@ -126,6 +129,7 @@ Default strategies are defined in `src/core/defaultStrategy.ts`. The platform su
 A base strategy contains:
 
 - `universe`: selected ETF symbols
+- `universeSelection`: fixed or dynamic mode plus history, coverage, turnover, total cap, category cap, and replacement-buffer settings
 - `factors`: enabled factor ids, weights, directions, and params
 - `filters`: pre-ranking rules such as liquidity thresholds or volatility ranges
 - `rebalance`: daily, weekly, or monthly schedule

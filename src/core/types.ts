@@ -33,6 +33,62 @@ export interface EtfProfile {
   category: string;
   trackingIndex: string;
   expenseRatio: number;
+  listedDate?: string;
+  assetSize?: number;
+  discoveredAt?: string;
+}
+
+export type UniverseMode = "fixed" | "dynamic";
+
+export interface DynamicUniverseConfig {
+  mode: UniverseMode;
+  minimumHistoryDays: number;
+  coverageLookbackDays: number;
+  minimumCoverageRatio: number;
+  liquidityLookbackDays: number;
+  minimumMedianAmount: number;
+  maximumSymbols: number;
+  maximumPerCategory: number;
+  retentionBufferRatio: number;
+  excludedCategories: string[];
+}
+
+export interface UniverseMembershipSnapshot {
+  date: string;
+  symbols: string[];
+}
+
+export type UniverseRejectionReason =
+  | "excluded-category"
+  | "unsupported-product"
+  | "insufficient-history"
+  | "insufficient-coverage"
+  | "insufficient-liquidity"
+  | "duplicate-exposure"
+  | "category-cap"
+  | "universe-cap";
+
+export interface UniverseSelectionMember {
+  symbol: string;
+  name: string;
+  category: string;
+  trackingIndex: string;
+  historyDays: number;
+  coverageRatio: number;
+  medianAmount: number;
+  expenseRatio: number;
+  retained: boolean;
+  reason: string;
+}
+
+export interface UniverseSelectionRecord {
+  date: string;
+  selected: UniverseSelectionMember[];
+  added: string[];
+  removed: string[];
+  eligibleCount: number;
+  rejectedCounts: Partial<Record<UniverseRejectionReason, number>>;
+  usedHistoricalMembershipFallback: boolean;
 }
 
 export type FactorParams = Record<string, number | string | boolean>;
@@ -95,6 +151,7 @@ export interface BaseStrategyConfig extends BacktestSettings {
   name: string;
   description: string;
   universe: string[];
+  universeSelection?: DynamicUniverseConfig;
   factors: FactorSelection[];
   filters: FilterRule[];
   rebalance: RebalanceConfig;
@@ -197,6 +254,7 @@ export interface RebalanceEvent {
   commissionAmount?: number;
   fillRate?: number;
   constraintCount?: number;
+  universeSymbols?: string[];
 }
 
 export interface BacktestMetrics {
@@ -284,6 +342,7 @@ export interface LatestSignal {
   holdings: Holding[];
   rankings: EvaluationRow[];
   nextRebalanceHint: string;
+  universe?: UniverseSelectionRecord;
 }
 
 export interface BacktestResult {
@@ -292,6 +351,7 @@ export interface BacktestResult {
   metrics: BacktestMetrics;
   benchmark?: BenchmarkResult;
   latestSignal: LatestSignal;
+  universeHistory?: UniverseSelectionRecord[];
   warnings: string[];
 }
 
@@ -307,5 +367,6 @@ export interface BacktestSnapshot {
   metrics: BacktestMetrics;
   equityCurve: EquityPoint[];
   benchmarkName?: string;
+  universeHistory?: UniverseSelectionRecord[];
   warnings: string[];
 }

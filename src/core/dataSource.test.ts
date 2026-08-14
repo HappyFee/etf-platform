@@ -21,6 +21,9 @@ describe("market data source", () => {
           requestedSymbols: ["510300", "159915"],
           succeededSymbols: ["510300"],
           failedSymbols: { "159915": "provider timeout" },
+          universeSnapshots: [
+            { date: "2026-05-28", symbols: ["510300", "159915"] }
+          ],
           profiles: etfProfiles.slice(0, 1),
           bars: marketBars.slice(0, 3)
         })
@@ -31,6 +34,9 @@ describe("market data source", () => {
     expect(dataset?.latestDate).toBe("2026-05-29");
     expect(dataset?.succeededSymbols).toEqual(["510300", "511880"]);
     expect(dataset?.failedSymbols).toEqual({ "159915": "provider timeout" });
+    expect(dataset?.universeSnapshots).toEqual([
+      { date: "2026-05-28", symbols: ["510300", "159915"] }
+    ]);
     expect(dataset?.profiles).toHaveLength(2);
     expect(dataset?.bars).toHaveLength(6);
   });

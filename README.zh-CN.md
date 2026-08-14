@@ -8,7 +8,8 @@
 
 ## 功能
 
-- ETF 池可配置，支持按代码、名称、分类或跟踪指数搜索
+- 支持固定 ETF 池，也支持按历史、数据完整性、近 20 日成交额和分类上限按月重建动态池
+- 动态池会对同一跟踪标的去重，并用保留缓冲降低相近 ETF 频繁互换
 - 支持多个自定义基础策略
 - 支持按权重组合多个已有策略
 - 支持参数化因子实例，包括动量、趋势、波动率、回撤和流动性因子
@@ -114,10 +115,12 @@ public/data/a-share-etf-bars.generated.json
 
 ```bash
 python -m pip install akshare pandas curl_cffi
-python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.generated.json
+python scripts/fetch-akshare-etf.py --discover --discover-limit 60 --full-refresh
 ```
 
-仓库内置的 GitHub Actions 工作流可以在交易日刷新生成数据。
+`--discover` 会从 AkShare 当前 ETF 行情发现流动性靠前的广谱母池，保留默认标的和仍处于流动性缓冲区的上期成员。每次母池变化都会写入 `universeSnapshots`，供回测按当时可用名单选池。仓库内置的 GitHub Actions 工作流会在交易日使用 `--full-refresh` 重拉当前母池，避免前复权基准变化造成新旧历史不一致；单只标的刷新失败时仍保留上一版历史数据。
+
+首次启用动态发现时只能从当前日期开始积累真实成员快照。更早的区间会按数据文件中可见的标的重建，并在回测中明确提示可能存在幸存者偏差。
 
 ## 策略配置
 
@@ -126,6 +129,7 @@ python scripts/fetch-akshare-etf.py --output public/data/a-share-etf-bars.genera
 基础策略包含：
 
 - `universe`：选中的 ETF 代码
+- `universeSelection`：固定或动态模式，以及最短历史、数据完整率、成交额、池子上限、分类上限和替换缓冲参数
 - `factors`：启用的因子、权重、方向和参数
 - `filters`：排序前筛选规则，例如成交额阈值或波动率区间
 - `rebalance`：每日、每周或每月调仓规则

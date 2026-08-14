@@ -71,6 +71,13 @@ async function runSmoke() {
     await page.locator('[data-testid="minimum-commission-input"]').waitFor();
     await page.locator('[data-testid="participation-rate-input"]').waitFor();
 
+    await page.locator('[data-testid="dynamic-universe-mode"]').click();
+    await page.locator('[data-testid="universe-min-history"]').waitFor();
+    const dynamicUniverseMembers = await page.locator(".dynamic-universe-table tbody tr").count();
+    if (dynamicUniverseMembers < 1) {
+      throw new Error("Expected at least one dynamically selected ETF");
+    }
+
     await page.getByRole("button", { name: "策略总览" }).click();
     await page.getByRole("button", { name: "保存快照" }).click();
     const snapshotCount = await page.locator(".archive-table tbody tr").count();
@@ -79,7 +86,7 @@ async function runSmoke() {
     }
 
     console.log(
-      `Smoke test passed: ${chartCount} charts, ${controls} lab controls, and ${snapshotCount} saved snapshot rendered.`
+      `Smoke test passed: ${chartCount} charts, ${controls} lab controls, ${dynamicUniverseMembers} dynamic-universe members, and ${snapshotCount} saved snapshot rendered.`
     );
   } finally {
     await browser?.close();

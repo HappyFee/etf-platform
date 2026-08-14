@@ -22,7 +22,7 @@ jobs:
         run: python -m pip install --upgrade akshare pandas curl_cffi
 
       - name: Fetch ETF bars
-        run: python scripts/fetch-akshare-etf.py
+        run: python scripts/fetch-akshare-etf.py --discover --discover-limit 60 --full-refresh
 
       - name: Summarize generated data
         run: |
@@ -34,8 +34,10 @@ jobs:
           payload = json.loads(Path("public/data/a-share-etf-bars.generated.json").read_text(encoding="utf-8"))
           summary = (
               f"latestDate={payload.get('latestDate')} "
-              f"symbols={len(payload.get('succeededSymbols', []))}/{len(payload.get('requestedSymbols', []))} "
-              f"bars={len(payload.get('bars', []))}"
+              f"motherPool={len(payload.get('requestedSymbols', []))} "
+              f"available={len(payload.get('succeededSymbols', []))} "
+              f"bars={len(payload.get('bars', []))} "
+              f"membershipSnapshots={len(payload.get('universeSnapshots', []))}"
           )
           print(summary)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:

@@ -78,6 +78,13 @@ export function createBacktestSnapshot({
     metrics: { ...result.metrics },
     equityCurve: result.equityCurve.map((point) => ({ ...point })),
     benchmarkName: result.benchmark?.name,
+    universeHistory: result.universeHistory?.map((record) => ({
+      ...record,
+      selected: record.selected.map((member) => ({ ...member })),
+      added: [...record.added],
+      removed: [...record.removed],
+      rejectedCounts: { ...record.rejectedCounts }
+    })),
     warnings: [...result.warnings]
   };
 }

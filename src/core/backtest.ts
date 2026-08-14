@@ -3,6 +3,11 @@ import { defaultBenchmarkSymbol, universeEqualWeightBenchmark } from "./defaultS
 import { evaluateUniverse } from "./factors";
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import { groupBarsBySymbol } from "./sampleData";
+import {
+  isDynamicUniverse,
+  sameSelectionMonth,
+  selectDynamicUniverse
+} from "./universeSelection";
 import type {
   BaseStrategyConfig,
   BenchmarkResult,
@@ -16,7 +21,9 @@ import type {
   Holding,
   MarketBar,
   RebalanceEvent,
-  StrategyConfig
+  StrategyConfig,
+  UniverseMembershipSnapshot,
+  UniverseSelectionRecord
 } from "./types";
 
 interface RunBacktestInput {
@@ -24,6 +31,7 @@ interface RunBacktestInput {
   profiles: EtfProfile[];
   config: StrategyConfig;
   strategyBook?: StrategyConfig[];
+  universeSnapshots?: UniverseMembershipSnapshot[];
 }
 
 interface DailyPortfolioReturn {
@@ -60,6 +68,7 @@ interface PendingRebalance {
   tradeDate: string;
   holdings: Holding[];
   rankings: EvaluationRow[];
+  universeSymbols?: string[];
 }
 
 interface BenchmarkBuildResult {
@@ -731,6 +740,63 @@ function buildBenchmark(
   };
 }
 
+function buildDynamicUniverseBenchmark(
+  closeLookup: CloseLookup,
+  profiles: EtfProfile[],
+  dates: string[],
+  startIndex: number,
+  cashReturnAnnual: number,
+  history: UniverseSelectionRecord[]
+): BenchmarkResult {
+  const profileBySymbol = new Map(profiles.map((profile) => [profile.symbol, profile]));
+  const records = [...history].sort((left, right) => left.date.localeCompare(right.date));
+  let recordIndex = 0;
+  let holdings: Holding[] = [];
+  let equity = 1;
+  let peak = 1;
+  const curve: EquityPoint[] = [];
+
+  for (let index = startIndex; index < dates.length; index += 1) {
+    const date = dates[index];
+    const previousDate = index > startIndex ? dates[index - 1] : date;
+
+    while (recordIndex < records.length && records[recordIndex].date <= previousDate) {
+      const symbols = records[recordIndex].selected.map((member) => member.symbol);
+      holdings = symbols.map((symbol) => ({
+        symbol,
+        name: profileBySymbol.get(symbol)?.name ?? symbol,
+        weight: symbols.length === 0 ? 0 : 1 / symbols.length
+      }));
+      recordIndex += 1;
+    }
+
+    const dailyReturn =
+      index === startIndex
+        ? 0
+        : dailyPortfolioReturn(
+            closeLookup,
+            dates[index - 1],
+            date,
+            holdings,
+            cashReturnAnnual
+          ).dailyReturn;
+    equity *= 1 + dailyReturn;
+    peak = Math.max(peak, equity);
+    curve.push({
+      date,
+      equity,
+      dailyReturn,
+      drawdown: drawdownAt(equity, peak)
+    });
+  }
+
+  return {
+    name: "动态 ETF 池等权基准",
+    equityCurve: curve,
+    metrics: calculateMetrics(curve, [])
+  };
+}
+
 function attachBenchmark(curve: EquityPoint[], benchmark: BenchmarkResult): EquityPoint[] {
   const benchmarkByDate = new Map(benchmark.equityCurve.map((point) => [point.date, point]));
   return curve.map((point) => {
@@ -818,6 +884,7 @@ function emptyBacktestResult(warnings: string[]): BacktestResult {
       rankings: [],
       nextRebalanceHint: "请先调整回测区间"
     },
+    universeHistory: [],
     warnings
   };
 }
@@ -834,27 +901,80 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   }
 
   const execution = defaultExecution(input.config);
-  const benchmarkBuild = buildBenchmark(
-    barsBySymbol,
-    closeLookup,
-    input.profiles,
-    input.config.universe,
-    dates,
-    startIndex,
-    input.config.risk.cashReturnAnnual,
-    input.config.benchmarkSymbol
-  );
-  const benchmark = benchmarkBuild.benchmark;
+  const dynamicUniverse = isDynamicUniverse(input.config.universeSelection);
+  const requestedBenchmark = input.config.benchmarkSymbol ?? defaultBenchmarkSymbol;
+  const useDynamicBenchmark =
+    dynamicUniverse &&
+    (requestedBenchmark === universeEqualWeightBenchmark || !barsBySymbol.has(requestedBenchmark));
+  const staticBenchmarkBuild = useDynamicBenchmark
+    ? null
+    : buildBenchmark(
+        barsBySymbol,
+        closeLookup,
+        input.profiles,
+        input.config.universe,
+        dates,
+        startIndex,
+        input.config.risk.cashReturnAnnual,
+        input.config.benchmarkSymbol
+      );
   const curve: EquityPoint[] = [];
   const rebalances: RebalanceEvent[] = [];
   const warnings: string[] = [...range.warnings];
-  if (benchmarkBuild.warning) {
-    warnings.push(benchmarkBuild.warning);
+  if (staticBenchmarkBuild?.warning) {
+    warnings.push(staticBenchmarkBuild.warning);
+  }
+  if (useDynamicBenchmark && requestedBenchmark !== universeEqualWeightBenchmark) {
+    warnings.push(`基准 ${requestedBenchmark} 缺少行情，已回退到动态 ETF 池等权基准。`);
   }
   let pendingRebalance: PendingRebalance | null = null;
   let holdings: Holding[] = [];
+  let activeUniverse: UniverseSelectionRecord | undefined;
+  let warnedMembershipFallback = false;
+  const universeHistory: UniverseSelectionRecord[] = [];
   let equity = 1;
   let peak = 1;
+
+  function universeAt(date: string): {
+    symbols: string[];
+    record?: UniverseSelectionRecord;
+  } {
+    if (!dynamicUniverse || !input.config.universeSelection) {
+      return { symbols: input.config.universe };
+    }
+    if (activeUniverse && sameSelectionMonth(activeUniverse.date, date)) {
+      return {
+        symbols: activeUniverse.selected.map((member) => member.symbol),
+        record: activeUniverse
+      };
+    }
+
+    activeUniverse = selectDynamicUniverse({
+      date,
+      dates,
+      barsBySymbol,
+      profiles: input.profiles,
+      config: input.config.universeSelection,
+      previous: activeUniverse,
+      membershipSnapshots: input.universeSnapshots
+    });
+    universeHistory.push(activeUniverse);
+
+    if (activeUniverse.usedHistoricalMembershipFallback && !warnedMembershipFallback) {
+      warnings.push(
+        "动态母池缺少对应日期的历史成员快照，早期区间按数据文件中的可用标的重建，可能存在幸存者偏差。"
+      );
+      warnedMembershipFallback = true;
+    }
+    if (activeUniverse.selected.length === 0) {
+      warnings.push(`${date} 动态 ETF 池没有符合条件的标的，本期保持现金。`);
+    }
+
+    return {
+      symbols: activeUniverse.selected.map((member) => member.symbol),
+      record: activeUniverse
+    };
+  }
 
   for (let index = startIndex; index < dates.length; index += 1) {
     const date = dates[index];
@@ -905,7 +1025,8 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
           costRate: trade.costRate,
           commissionAmount: trade.commissionAmount,
           fillRate: trade.fillRate,
-          constraintCount: trade.constraintCount
+          constraintCount: trade.constraintCount,
+          universeSymbols: pendingTrade.universeSymbols
         });
         pendingRebalance = null;
 
@@ -961,7 +1082,8 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
             costRate: trade.costRate,
             commissionAmount: trade.commissionAmount,
             fillRate: trade.fillRate,
-            constraintCount: trade.constraintCount
+            constraintCount: trade.constraintCount,
+            universeSymbols: pendingTrade.universeSymbols
           });
           pendingRebalance = null;
         }
@@ -977,10 +1099,11 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
     });
 
     if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
+      const selectedUniverse = universeAt(date);
       const evaluation = evaluateUniverse({
         barsBySymbol,
         profiles: input.profiles,
-        config: input.config,
+        config: { ...input.config, universe: selectedUniverse.symbols },
         date
       });
       warnings.push(...evaluation.warnings);
@@ -992,7 +1115,8 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
           signalDate: date,
           tradeDate,
           holdings: nextHoldings,
-          rankings: evaluation.rows
+          rankings: evaluation.rows,
+          universeSymbols: selectedUniverse.symbols
         };
       } else {
         warnings.push(`${date} 已是最后一个交易日，信号仅用于跟踪，不纳入回测成交。`);
@@ -1001,10 +1125,11 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   }
 
   const latestDate = dates.at(-1) ?? "";
+  const latestUniverse = universeAt(latestDate);
   const latestEvaluation = evaluateUniverse({
     barsBySymbol,
     profiles: input.profiles,
-    config: input.config,
+    config: { ...input.config, universe: latestUniverse.symbols },
     date: latestDate
   });
   warnings.push(...latestEvaluation.warnings);
@@ -1014,6 +1139,16 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
     latestEvaluation.rows.length > 0
       ? holdingsFromRows(latestEvaluation.rows, input.config, input.profiles)
       : latestRebalance?.holdings ?? holdings;
+  const benchmark = useDynamicBenchmark
+    ? buildDynamicUniverseBenchmark(
+        closeLookup,
+        input.profiles,
+        dates,
+        startIndex,
+        input.config.risk.cashReturnAnnual,
+        universeHistory
+      )
+    : staticBenchmarkBuild!.benchmark;
   const equityCurve = attachBenchmark(curve, benchmark);
 
   return {
@@ -1025,8 +1160,10 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       date: latestDate,
       holdings: latestHoldings,
       rankings: latestEvaluation.rows,
-      nextRebalanceHint: `${nextRebalanceHint(input.config.rebalance)}；信号收盘后生成，下一交易日${execution.price === "next_close" ? "收盘" : "开盘"}成交`
+      nextRebalanceHint: `${nextRebalanceHint(input.config.rebalance)}；信号收盘后生成，下一交易日${execution.price === "next_close" ? "收盘" : "开盘"}成交`,
+      universe: latestUniverse.record
     },
+    universeHistory,
     warnings: warningsFrom(warnings)
   };
 }
@@ -1134,6 +1271,7 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
         rankings: [],
         nextRebalanceHint: "请先配置子策略"
       },
+      universeHistory: [],
       warnings
     };
   }
@@ -1148,7 +1286,8 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
       bars: input.bars,
       profiles: input.profiles,
       config: childConfig,
-      strategyBook: input.strategyBook
+      strategyBook: input.strategyBook,
+      universeSnapshots: input.universeSnapshots
     });
     warnings.push(
       ...result.warnings.map((warning) => `${component.strategy.name}: ${warning}`)
@@ -1273,6 +1412,7 @@ function runCompositeBacktest(input: RunBacktestInput & { config: CompositeStrat
       rankings,
       nextRebalanceHint: "跟随子策略调仓"
     },
+    universeHistory: [],
     warnings: [...new Set(warnings)]
   };
 }

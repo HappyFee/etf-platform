@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 DEFAULT_SYMBOLS = [
@@ -53,6 +55,12 @@ PROFILE_NAMES = {
 }
 
 
+ETF_CODE_PATTERN = re.compile(r"^(?:15|51|52|56|58)\d{4}$")
+UNSUPPORTED_PRODUCT_PATTERN = re.compile(
+    r"(?:LOF|REIT|分级|杠杆|反向|两倍|2倍|三倍|3倍|联接)", re.IGNORECASE
+)
+
+
 @dataclass
 class EtfProfile:
     symbol: str
@@ -61,6 +69,16 @@ class EtfProfile:
     category: str
     trackingIndex: str
     expenseRatio: float = 0.005
+    listedDate: str | None = None
+    assetSize: float | None = None
+    discoveredAt: str | None = None
+
+
+@dataclass
+class DiscoveredEtf:
+    symbol: str
+    name: str
+    amount: float
 
 
 @dataclass
@@ -77,13 +95,26 @@ class MarketBar:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--symbols", nargs="*", default=DEFAULT_SYMBOLS)
+    parser.add_argument("--symbols", nargs="*", default=None)
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Discover a broad liquid ETF mother pool from the current market snapshot.",
+    )
+    parser.add_argument("--discover-limit", type=int, default=60)
     parser.add_argument("--start", default="20210101")
     parser.add_argument("--end", default=date.today().strftime("%Y%m%d"))
     parser.add_argument("--adjust", default="qfq", choices=["", "qfq", "hfq"])
+    parser.add_argument(
+        "--full-refresh",
+        action="store_true",
+        help="Refetch the complete requested range instead of the recent overlap.",
+    )
+    parser.add_argument("--overlap-days", type=int, default=14)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-sleep", type=float, default=2)
     parser.add_argument("--symbol-sleep", type=float, default=1.5)
+    parser.add_argument("--metadata-sleep", type=float, default=0.2)
     parser.add_argument("--min-success-ratio", type=float, default=0.8)
     parser.add_argument(
         "--output",
@@ -97,21 +128,248 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def build_profiles(symbols: Iterable[str]) -> list[EtfProfile]:
+def unique_symbols(symbols: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
+
+
+def normalize_symbol(value: object) -> str:
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text.zfill(6)
+
+
+def finite_number(value: object, default: float = 0) -> float:
+    try:
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def clean_text(value: object, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, float) and math.isnan(value):
+        return default
+    text = str(value).strip()
+    return text if text and text.lower() != "nan" else default
+
+
+def discover_etfs() -> list[DiscoveredEtf]:
+    try:
+        import akshare as ak  # type: ignore
+    except ImportError as exc:
+        raise SystemExit("akshare is required: pip install akshare pandas") from exc
+
+    frame = ak.fund_etf_spot_em()
+    required_columns = ["代码", "名称", "成交额"]
+    missing = [column for column in required_columns if column not in frame.columns]
+    if missing:
+        raise ValueError(f"ETF discovery missing expected columns: {missing}")
+
+    discovered: dict[str, DiscoveredEtf] = {}
+    for record in frame.to_dict("records"):
+        symbol = normalize_symbol(record["代码"])
+        name = clean_text(record["名称"], symbol)
+        if not ETF_CODE_PATTERN.fullmatch(symbol) or UNSUPPORTED_PRODUCT_PATTERN.search(name):
+            continue
+        candidate = DiscoveredEtf(
+            symbol=symbol,
+            name=name,
+            amount=max(0, finite_number(record["成交额"])),
+        )
+        previous = discovered.get(symbol)
+        if previous is None or candidate.amount > previous.amount:
+            discovered[symbol] = candidate
+
+    if not discovered:
+        raise ValueError("ETF discovery returned no supported exchange-traded funds")
+    return sorted(discovered.values(), key=lambda item: (-item.amount, item.symbol))
+
+
+def select_discovered_symbols(
+    discovered: list[DiscoveredEtf],
+    limit: int,
+    pinned_symbols: Iterable[str],
+    previous_symbols: Iterable[str],
+) -> list[str]:
+    limit = max(1, limit)
+    ranking = [item.symbol for item in discovered]
+    ranking_set = set(ranking)
+    pinned = unique_symbols(pinned_symbols)
+    previous = set(previous_symbols)
+    selected: list[str] = []
+
+    for symbol in pinned:
+        if symbol in ranking_set or symbol in PROFILE_NAMES:
+            selected.append(symbol)
+
+    retention_limit = min(len(ranking), math.ceil(limit * 1.3))
+    for symbol in ranking[:retention_limit]:
+        if symbol in previous and symbol not in selected and len(selected) < limit:
+            selected.append(symbol)
+
+    for symbol in ranking:
+        if symbol not in selected and len(selected) < limit:
+            selected.append(symbol)
+
+    return selected
+
+
+def infer_category(name: str, tracking_index: str, fund_type: str = "") -> str:
+    text = f"{name} {tracking_index} {fund_type}"
+    category_keywords = [
+        ("货币", ("货币", "日利", "添益", "保证金")),
+        ("债券", ("债", "政金", "国开", "信用")),
+        ("商品", ("黄金", "白银", "豆粕", "商品", "能源化工")),
+        ("海外", ("QDII", "纳指", "标普", "恒生", "港股", "日经", "德国", "法国")),
+        ("消费", ("消费", "食品", "酒", "家电", "旅游")),
+        ("医药", ("医药", "医疗", "创新药", "生物")),
+        ("新能源", ("新能源", "光伏", "电池", "储能", "碳中和")),
+        ("科技", ("科技", "芯片", "半导体", "人工智能", "软件", "通信", "机器人")),
+        ("金融", ("证券", "银行", "保险", "金融")),
+        ("周期", ("有色", "煤炭", "钢铁", "化工", "资源")),
+    ]
+    for category, keywords in category_keywords:
+        if any(keyword.lower() in text.lower() for keyword in keywords):
+            return category
+
+    broad_keywords = (
+        "沪深300",
+        "中证500",
+        "中证1000",
+        "中证2000",
+        "上证50",
+        "A500",
+        "创业板",
+        "科创50",
+        "红利",
+    )
+    return "宽基" if any(keyword.lower() in text.lower() for keyword in broad_keywords) else "主题"
+
+
+def parse_percentage(value: object, default: float = 0.005) -> float:
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", clean_text(value))
+    return float(match.group(1)) / 100 if match else default
+
+
+def parse_listed_date(value: object) -> str | None:
+    match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", clean_text(value))
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    return date(year, month, day).isoformat()
+
+
+def parse_asset_size(value: object) -> float | None:
+    text = clean_text(value)
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    if "亿" in text:
+        amount *= 100_000_000
+    elif "万" in text:
+        amount *= 10_000
+    return amount
+
+
+def fetch_profile_metadata(symbol: str, fallback_name: str, discovered_at: str) -> EtfProfile:
+    try:
+        import akshare as ak  # type: ignore
+    except ImportError as exc:
+        raise SystemExit("akshare is required: pip install akshare pandas") from exc
+
+    frame = ak.fund_overview_em(symbol=symbol)
+    if frame.empty:
+        raise ValueError(f"{symbol} overview returned no metadata")
+    record: dict[str, Any] = frame.to_dict("records")[0]
+    name = clean_text(record.get("基金简称"), fallback_name)
+    tracking_index = clean_text(record.get("跟踪标的"), name)
+    if "无跟踪标的" in tracking_index:
+        tracking_index = name
+    fund_type = clean_text(record.get("基金类型"))
+    return EtfProfile(
+        symbol=symbol,
+        name=name,
+        exchange="SH" if symbol.startswith("5") else "SZ",
+        category=infer_category(name, tracking_index, fund_type),
+        trackingIndex=tracking_index,
+        expenseRatio=parse_percentage(record.get("管理费率")),
+        listedDate=parse_listed_date(record.get("成立日期/规模")),
+        assetSize=parse_asset_size(record.get("资产规模")),
+        discoveredAt=discovered_at,
+    )
+
+
+def profile_from_payload(value: object) -> EtfProfile | None:
+    if not isinstance(value, dict):
+        return None
+    symbol = clean_text(value.get("symbol"))
+    exchange = clean_text(value.get("exchange"))
+    if not symbol or exchange not in {"SH", "SZ"}:
+        return None
+    return EtfProfile(
+        symbol=symbol,
+        name=clean_text(value.get("name"), symbol),
+        exchange=exchange,
+        category=clean_text(value.get("category"), "主题"),
+        trackingIndex=clean_text(value.get("trackingIndex"), symbol),
+        expenseRatio=finite_number(value.get("expenseRatio"), 0.005),
+        listedDate=clean_text(value.get("listedDate")) or None,
+        assetSize=finite_number(value.get("assetSize")) or None,
+        discoveredAt=clean_text(value.get("discoveredAt")) or None,
+    )
+
+
+def build_profiles(
+    symbols: Iterable[str],
+    discovered_by_symbol: dict[str, DiscoveredEtf],
+    existing_by_symbol: dict[str, EtfProfile],
+    discovered_at: str,
+    metadata_sleep: float,
+) -> list[EtfProfile]:
     profiles: list[EtfProfile] = []
     for symbol in symbols:
-        name, exchange, category, tracking_index = PROFILE_NAMES.get(
-            symbol, (symbol, "SH" if symbol.startswith("5") else "SZ", "ETF", symbol)
-        )
-        profiles.append(
-            EtfProfile(
-                symbol=symbol,
-                name=name,
-                exchange=exchange,
-                category=category,
-                trackingIndex=tracking_index,
+        existing = existing_by_symbol.get(symbol)
+        if existing and existing.category != "ETF" and existing.trackingIndex != symbol:
+            profiles.append(existing)
+            continue
+
+        known = PROFILE_NAMES.get(symbol)
+        fallback_name = discovered_by_symbol.get(symbol, DiscoveredEtf(symbol, symbol, 0)).name
+        if known:
+            name, exchange, category, tracking_index = known
+            profiles.append(
+                EtfProfile(
+                    symbol=symbol,
+                    name=name,
+                    exchange=exchange,
+                    category=category,
+                    trackingIndex=tracking_index,
+                    discoveredAt=existing.discoveredAt if existing else discovered_at,
+                )
             )
-        )
+            continue
+
+        try:
+            profiles.append(fetch_profile_metadata(symbol, fallback_name, discovered_at))
+        except Exception as exc:  # noqa: BLE001 - metadata should not block market data refresh.
+            log(f"{symbol}: metadata lookup failed, using inferred profile: {exc}")
+            tracking_index = fallback_name.replace("ETF", "").strip() or symbol
+            profiles.append(
+                EtfProfile(
+                    symbol=symbol,
+                    name=fallback_name,
+                    exchange="SH" if symbol.startswith("5") else "SZ",
+                    category=infer_category(fallback_name, tracking_index),
+                    trackingIndex=tracking_index,
+                    discoveredAt=existing.discoveredAt if existing else discovered_at,
+                )
+            )
+        finally:
+            time.sleep(max(0, metadata_sleep))
     return profiles
 
 
@@ -396,62 +654,232 @@ def fetch_symbol_with_retry(
     raise ValueError(f"{symbol} failed after {attempts} attempts: {last_error}")
 
 
+def load_existing_payload(output: Path) -> dict[str, Any]:
+    if not output.exists():
+        return {}
+    try:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        log(f"existing output ignored because it could not be read: {exc}")
+        return {}
+
+
+def market_bar_from_payload(value: object) -> MarketBar | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return MarketBar(
+            symbol=clean_text(value.get("symbol")),
+            date=clean_text(value.get("date")),
+            open=float(value["open"]),
+            high=float(value["high"]),
+            low=float(value["low"]),
+            close=float(value["close"]),
+            volume=int(float(value["volume"])),
+            amount=int(float(value["amount"])),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def incremental_start(
+    symbol: str,
+    existing_by_symbol: dict[str, list[MarketBar]],
+    configured_start: str,
+    overlap_days: int,
+) -> str:
+    history = existing_by_symbol.get(symbol) or []
+    if not history:
+        return configured_start
+    latest = date.fromisoformat(max(bar.date for bar in history))
+    overlap_start = (latest - timedelta(days=max(0, overlap_days))).strftime("%Y%m%d")
+    return max(configured_start, overlap_start)
+
+
+def membership_snapshots_from_payload(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    snapshots: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        snapshot_date = clean_text(item.get("date"))
+        symbols = item.get("symbols")
+        if snapshot_date and isinstance(symbols, list):
+            snapshots.append(
+                {
+                    "date": snapshot_date,
+                    "symbols": sorted(unique_symbols(symbols)),
+                }
+            )
+    return sorted(snapshots, key=lambda item: item["date"])
+
+
+def update_membership_snapshots(
+    existing: list[dict[str, Any]], snapshot_date: str, symbols: Iterable[str]
+) -> list[dict[str, Any]]:
+    current_symbols = sorted(unique_symbols(symbols))
+    snapshots = [item for item in existing if item["date"] != snapshot_date]
+    latest = snapshots[-1] if snapshots else None
+    if latest and latest["date"] > snapshot_date:
+        return snapshots
+    if latest and latest["symbols"] == current_symbols:
+        return snapshots
+    snapshots.append({"date": snapshot_date, "symbols": current_symbols})
+    return sorted(snapshots, key=lambda item: item["date"])
+
+
+def profile_payload(profile: EtfProfile) -> dict[str, Any]:
+    return {key: value for key, value in asdict(profile).items() if value is not None}
+
+
 def main() -> None:
     args = parse_args()
-    bars: list[MarketBar] = []
-    succeeded_symbols: list[str] = []
+    output = Path(args.output)
+    existing_payload = load_existing_payload(output)
+    existing_bars = [
+        bar
+        for item in existing_payload.get("bars", []) or []
+        if (bar := market_bar_from_payload(item)) is not None and bar.symbol and bar.date
+    ]
+    existing_bars_by_symbol: dict[str, list[MarketBar]] = {}
+    for bar in existing_bars:
+        existing_bars_by_symbol.setdefault(bar.symbol, []).append(bar)
+
+    existing_profiles = [
+        profile
+        for item in existing_payload.get("profiles", []) or []
+        if (profile := profile_from_payload(item)) is not None
+    ]
+    existing_profile_by_symbol = {profile.symbol: profile for profile in existing_profiles}
+
+    discovered = discover_etfs() if args.discover else []
+    discovered_by_symbol = {item.symbol: item for item in discovered}
+    explicit_symbols = args.symbols if args.symbols is not None else DEFAULT_SYMBOLS
+    if args.discover:
+        requested_symbols = select_discovered_symbols(
+            discovered,
+            args.discover_limit,
+            explicit_symbols,
+            existing_payload.get("requestedSymbols", []) or [],
+        )
+        log(
+            f"discovered {len(discovered)} supported ETFs; selected "
+            f"{len(requested_symbols)} for the mother pool"
+        )
+    else:
+        requested_symbols = unique_symbols(explicit_symbols)
+
+    if not requested_symbols:
+        raise SystemExit("ETF data refresh failed: no symbols requested")
+
+    discovered_at = date.today().isoformat()
+    current_profiles = build_profiles(
+        requested_symbols,
+        discovered_by_symbol,
+        existing_profile_by_symbol,
+        discovered_at,
+        args.metadata_sleep,
+    )
+    profile_by_symbol = dict(existing_profile_by_symbol)
+    profile_by_symbol.update({profile.symbol: profile for profile in current_profiles})
+
+    merged_bars = {(bar.symbol, bar.date): bar for bar in existing_bars}
+
+    refreshed_symbols: list[str] = []
     failed_symbols: dict[str, str] = {}
 
-    for symbol in args.symbols:
+    for symbol in requested_symbols:
+        fetch_start = (
+            args.start
+            if args.full_refresh
+            else incremental_start(
+                symbol,
+                existing_bars_by_symbol,
+                args.start,
+                args.overlap_days,
+            )
+        )
         try:
             symbol_bars = fetch_symbol_with_retry(
                 symbol,
-                args.start,
+                fetch_start,
                 args.end,
                 args.adjust,
                 args.retries,
                 args.retry_sleep,
             )
-            bars.extend(symbol_bars)
-            succeeded_symbols.append(symbol)
+            if args.full_refresh:
+                merged_bars = {
+                    key: bar
+                    for key, bar in merged_bars.items()
+                    if key[0] != symbol
+                }
+            for bar in symbol_bars:
+                merged_bars[(bar.symbol, bar.date)] = bar
+            refreshed_symbols.append(symbol)
         except Exception as exc:  # noqa: BLE001 - keep one bad ETF from blocking all data.
             failed_symbols[symbol] = str(exc)
         finally:
             time.sleep(max(0, args.symbol_sleep))
 
-    success_ratio = len(succeeded_symbols) / max(1, len(args.symbols))
-    if not bars or success_ratio < args.min_success_ratio:
+    success_ratio = len(refreshed_symbols) / max(1, len(requested_symbols))
+    if not merged_bars or success_ratio < args.min_success_ratio:
         raise SystemExit(
             "ETF data refresh failed: "
-            f"{len(succeeded_symbols)}/{len(args.symbols)} symbols succeeded; "
+            f"{len(refreshed_symbols)}/{len(requested_symbols)} symbols refreshed; "
             f"failed={failed_symbols}"
         )
 
+    bars = sorted(merged_bars.values(), key=lambda item: (item.symbol, item.date))
+    available_symbols = {bar.symbol for bar in bars}
+    succeeded_symbols = [
+        symbol for symbol in requested_symbols if symbol in available_symbols
+    ]
     latest_date = max(bar.date for bar in bars)
     earliest_date = min(bar.date for bar in bars)
+    current_latest_date = max(
+        bar.date for bar in bars if bar.symbol in set(succeeded_symbols)
+    )
+    universe_snapshots = update_membership_snapshots(
+        membership_snapshots_from_payload(existing_payload.get("universeSnapshots")),
+        current_latest_date,
+        requested_symbols,
+    )
+
+    ordered_profile_symbols = unique_symbols(
+        [*requested_symbols, *(bar.symbol for bar in bars), *profile_by_symbol]
+    )
+    profiles = [
+        profile_by_symbol[symbol]
+        for symbol in ordered_profile_symbols
+        if symbol in profile_by_symbol
+    ]
 
     payload = {
-        "source": "multi-provider.etf.daily",
+        "source": "multi-provider.etf.dynamic-daily" if args.discover else "multi-provider.etf.daily",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "startDate": earliest_date,
         "endDate": latest_date,
         "latestDate": latest_date,
-        "requestedSymbols": list(args.symbols),
+        "requestedSymbols": requested_symbols,
         "succeededSymbols": succeeded_symbols,
         "failedSymbols": failed_symbols,
-        "profiles": [asdict(profile) for profile in build_profiles(succeeded_symbols)],
+        "universeSnapshots": universe_snapshots,
+        "profiles": [profile_payload(profile) for profile in profiles],
         "bars": [asdict(bar) for bar in bars],
     }
 
-    output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
     print(
-        f"wrote {len(bars)} bars for {len(succeeded_symbols)}/{len(args.symbols)} "
-        f"symbols through {latest_date} to {output}"
+        f"wrote {len(bars)} bars for {len(succeeded_symbols)}/{len(requested_symbols)} "
+        f"current symbols with {len(universe_snapshots)} membership snapshots "
+        f"through {latest_date} to {output}"
     )
 
 

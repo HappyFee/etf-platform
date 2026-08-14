@@ -35,6 +35,7 @@ describe("backtest archive", () => {
     expect(item.equityCurve.length).toBeGreaterThan(250);
     expect(item.metrics.totalReturn).toBeTypeOf("number");
     expect(item.config).not.toBe(defaultStrategy);
+    expect(item.universeHistory).toEqual([]);
   });
 
   test("keeps newest snapshots first and enforces the configured limit", () => {

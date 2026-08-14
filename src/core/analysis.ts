@@ -1,6 +1,7 @@
 import { tradingDays } from "./date";
 import { runBacktest } from "./backtest";
 import { groupBarsBySymbol } from "./sampleData";
+import { isDynamicUniverse } from "./universeSelection";
 import type {
   BacktestResult,
   BaseStrategyConfig,
@@ -11,6 +12,7 @@ import type {
   RobustnessCase,
   RobustnessReport,
   StrategyConfig,
+  UniverseMembershipSnapshot,
   ValidationCheck,
   ValidationReport,
   ValidationSegment
@@ -156,18 +158,21 @@ export function buildRobustnessReport({
   bars,
   profiles,
   config,
-  strategyBook
+  strategyBook,
+  universeSnapshots
 }: {
   bars: MarketBar[];
   profiles: EtfProfile[];
   config: StrategyConfig;
   strategyBook: StrategyConfig[];
+  universeSnapshots?: UniverseMembershipSnapshot[];
 }): RobustnessReport {
   const stressedCost = runBacktest({
     bars,
     profiles,
     config: withExecutionStress(config),
-    strategyBook
+    strategyBook,
+    universeSnapshots
   });
   const cases = [robustnessCase("成本+滑点压力", stressedCost)];
 
@@ -176,13 +181,15 @@ export function buildRobustnessReport({
       bars,
       profiles,
       config: withFirstWindow(config, 0.75),
-      strategyBook
+      strategyBook,
+      universeSnapshots
     });
     const longerWindow = runBacktest({
       bars,
       profiles,
       config: withFirstWindow(config, 1.25),
-      strategyBook
+      strategyBook,
+      universeSnapshots
     });
     cases.push(
       robustnessCase("首个窗口缩短25%", shorterWindow),
@@ -221,12 +228,14 @@ function causalityReplayCheck({
   profiles,
   config,
   strategyBook,
+  universeSnapshots,
   result
 }: {
   bars: MarketBar[];
   profiles: EtfProfile[];
   config: StrategyConfig;
   strategyBook: StrategyConfig[];
+  universeSnapshots?: UniverseMembershipSnapshot[];
   result: BacktestResult;
 }): ValidationCheck {
   if (!isBaseStrategy(config)) {
@@ -266,7 +275,8 @@ function causalityReplayCheck({
       bars: bars.filter((bar) => bar.date <= signalDate),
       profiles,
       config: replayConfig,
-      strategyBook
+      strategyBook,
+      universeSnapshots
     });
     const expected = event.rankings
       .slice(0, 10)
@@ -296,12 +306,14 @@ export function buildValidationReport({
   profiles,
   config,
   strategyBook,
+  universeSnapshots,
   result
 }: {
   bars: MarketBar[];
   profiles: EtfProfile[];
   config: StrategyConfig;
   strategyBook: StrategyConfig[];
+  universeSnapshots?: UniverseMembershipSnapshot[];
   result?: BacktestResult;
 }): ValidationReport {
   const dates = [...new Set(bars.map((bar) => bar.date))]
@@ -312,7 +324,7 @@ export function buildValidationReport({
         (!config.backtestEndDate || date <= config.backtestEndDate)
     );
   const fullResult =
-    result ?? runBacktest({ bars, profiles, config, strategyBook });
+    result ?? runBacktest({ bars, profiles, config, strategyBook, universeSnapshots });
   const signalViolations = fullResult.rebalances.filter(
     (event) =>
       !event.signalDate || !event.tradeDate || event.signalDate >= event.tradeDate
@@ -333,12 +345,21 @@ export function buildValidationReport({
       profiles,
       config,
       strategyBook,
+      universeSnapshots,
       result: fullResult
     }),
     {
-      label: "固定 ETF 池偏差",
-      status: "warn",
-      detail: "ETF 池未记录历史成分变更，仍需警惕幸存者偏差"
+      label: "ETF 池历史成分",
+      status:
+        isDynamicUniverse(config.kind === "base" ? config.universeSelection : undefined) &&
+        universeSnapshots?.some((snapshot) => snapshot.date <= (dates[0] ?? ""))
+          ? "pass"
+          : "warn",
+      detail:
+        isDynamicUniverse(config.kind === "base" ? config.universeSelection : undefined) &&
+        universeSnapshots?.some((snapshot) => snapshot.date <= (dates[0] ?? ""))
+          ? "动态母池使用对应日期可见的成员快照"
+          : "缺少完整的历史成员快照，仍需警惕幸存者偏差"
     }
   );
 
@@ -371,13 +392,15 @@ export function buildValidationReport({
     bars,
     profiles,
     config: inSampleConfig,
-    strategyBook
+    strategyBook,
+    universeSnapshots
   });
   const outOfSampleResult = runBacktest({
     bars,
     profiles,
     config: outOfSampleConfig,
-    strategyBook
+    strategyBook,
+    universeSnapshots
   });
   const inSample = validationSegment(inSampleResult);
   const outOfSample = validationSegment(outOfSampleResult);

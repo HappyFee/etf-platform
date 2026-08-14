@@ -7,6 +7,7 @@ import {
   universeEqualWeightBenchmark
 } from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
+import { defaultDynamicUniverseConfig } from "./universeSelection";
 
 describe("backtest engine", () => {
   test("runs a complete weekly ETF rotation backtest with metrics and signals", () => {
@@ -27,6 +28,48 @@ describe("backtest engine", () => {
       defaultStrategy.portfolio.topN
     );
     expect(result.latestSignal.rankings.length).toBeGreaterThan(0);
+  });
+
+  test("rebuilds and audits a dynamic universe monthly", () => {
+    const allowedSymbols = defaultStrategy.universe.slice(0, 6);
+    const result = runBacktest({
+      bars: marketBars,
+      profiles: etfProfiles,
+      universeSnapshots: [
+        {
+          date: marketBars[0].date,
+          symbols: allowedSymbols
+        }
+      ],
+      config: {
+        ...defaultStrategy,
+        benchmarkSymbol: universeEqualWeightBenchmark,
+        universeSelection: {
+          ...defaultDynamicUniverseConfig,
+          minimumHistoryDays: 60,
+          coverageLookbackDays: 60,
+          minimumCoverageRatio: 0.9,
+          liquidityLookbackDays: 20,
+          minimumMedianAmount: 0,
+          maximumSymbols: 4,
+          maximumPerCategory: 2
+        }
+      }
+    });
+
+    expect(result.universeHistory?.length).toBeGreaterThan(12);
+    expect(result.latestSignal.universe?.selected.length).toBeLessThanOrEqual(4);
+    expect(result.latestSignal.universe?.usedHistoricalMembershipFallback).toBe(false);
+    expect(result.benchmark?.name).toBe("动态 ETF 池等权基准");
+    expect(
+      result.universeHistory?.every((record) =>
+        record.selected.every((member) => allowedSymbols.includes(member.symbol))
+      )
+    ).toBe(true);
+    expect(result.rebalances.every((event) => Array.isArray(event.universeSymbols))).toBe(true);
+    expect(
+      new Set(result.universeHistory?.map((record) => record.date.slice(0, 7))).size
+    ).toBe(result.universeHistory?.length);
   });
 
   test("returns warnings when filters remove every ETF", () => {
