@@ -21,7 +21,7 @@ export function SignalPanel({
     >
       <div className="signal-layout">
         <div className="holdings-panel">
-          <h3>当前持仓</h3>
+          <h3>最新目标持仓</h3>
           {displayHoldings.length === 0 ? (
             <EmptyState>当前策略为空仓。</EmptyState>
           ) : (
@@ -52,7 +52,7 @@ export function SignalPanel({
                   <th>排名</th>
                   <th>ETF</th>
                   <th>类别</th>
-                  <th>得分</th>
+                  <th>{topRankings.some(row => row.periodReturn !== undefined) ? "区间涨幅" : "得分"}</th>
                 </tr>
               </thead>
               <tbody>
@@ -64,7 +64,7 @@ export function SignalPanel({
                       <small>{row.symbol}</small>
                     </td>
                     <td>{row.category}</td>
-                    <td>{row.score.toFixed(3)}</td>
+                    <td>{row.periodReturn !== undefined ? formatPercent(row.periodReturn) : row.score.toFixed(3)}</td>
                   </tr>
                 ))}
               </tbody>

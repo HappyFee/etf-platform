@@ -75,8 +75,7 @@ table {
 }
 
 .top-band {
-  min-height: 164px;
-  padding: 26px clamp(18px, 4vw, 56px) 24px;
+  padding: 16px clamp(18px, 4vw, 56px);
   color: #fff;
   border-bottom: 1px solid rgba(255, 255, 255, 0.18);
   background:
@@ -91,14 +90,13 @@ table {
   align-items: center;
   gap: 24px;
   max-width: 1480px;
-  min-height: 112px;
   margin: 0 auto;
 }
 
 .top-band h1 {
   max-width: 900px;
-  margin: 9px 0 10px;
-  font-size: 40px;
+  margin: 0 0 6px;
+  font-size: 22px;
   line-height: 1.12;
   letter-spacing: 0;
 }
@@ -147,10 +145,10 @@ table {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 28px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: var(--radius);
-  padding: 7px 10px;
+  padding: 4px 8px;
   color: rgba(255, 255, 255, 0.9);
   background: rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(10px);
@@ -328,16 +326,133 @@ table {
 }
 
 .tab-bar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  max-width: 1480px;
+  margin: 0 auto;
   display: flex;
   gap: 8px;
-  overflow-x: auto;
   padding: 10px clamp(18px, 4vw, 56px);
   border-bottom: 1px solid var(--line);
   background: rgba(248, 250, 249, 0.92);
   backdrop-filter: blur(12px);
+}
+
+.workspace-navigation {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #f8faf9;
+  border-bottom: 1px solid var(--line);
+}
+
+.strategy-context {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 12px clamp(18px, 4vw, 56px) 8px;
+}
+
+.strategy-context__selection {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 680px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.strategy-context__selection > span {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.strategy-context__selection small {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.strategy-context__selection select {
+  min-width: 0;
+  height: 40px;
+  text-overflow: ellipsis;
+}
+
+.strategy-context__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.strategy-context__actions .icon-action {
+  width: 40px;
+  height: 40px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.strategy-delete-dialog {
+  width: min(440px, calc(100% - 32px));
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.strategy-delete-dialog::backdrop {
+  background: rgba(23, 32, 42, 0.45);
+}
+
+.strategy-delete-dialog h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.strategy-delete-dialog p,
+.strategy-delete-dialog li {
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.strategy-delete-name {
+  font-weight: 700;
+}
+
+.strategy-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.workspace-content {
+  min-width: 0;
+}
+
+.workspace-content--pending {
+  visibility: hidden;
+}
+
+.calculation-notice {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 100%;
+  padding: 8px 18px;
+  color: var(--accent-strong);
+  background: #edf8f5;
+  text-align: center;
+  font-size: 13px;
 }
 
 .tab-button {
@@ -362,6 +477,7 @@ table {
 }
 
 .workspace {
+  position: relative;
   width: 100%;
   min-width: 0;
   max-width: 1480px;
@@ -833,19 +949,20 @@ td small {
   grid-template-columns: repeat(6, minmax(130px, 1fr));
 }
 
-.strategy-toolbar {
+.rotation-rules {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) repeat(4, max-content);
-  align-items: end;
-  gap: 10px;
+  gap: 18px;
+  margin-top: 18px;
 }
 
-.strategy-toolbar label {
-  display: grid;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
+.rotation-rules > div {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.rotation-rules h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
 }
 
 .text-action {
@@ -1230,17 +1347,17 @@ input[type="checkbox"] {
 
 @media (max-width: 760px) {
   .top-band {
-    padding: 20px 18px;
+    padding: 12px 18px;
   }
 
   .top-band__content {
     grid-template-columns: 1fr;
     align-items: start;
-    gap: 18px;
+    gap: 10px;
   }
 
   .top-band h1 {
-    font-size: 30px;
+    font-size: 20px;
   }
 
   .status-stack {
@@ -1280,10 +1397,41 @@ input[type="checkbox"] {
     justify-content: center;
     min-width: 0;
     min-height: 48px;
-    gap: 4px;
+    gap: 5px;
     padding: 0 5px;
     font-size: 12px;
-    white-space: normal;
+    white-space: nowrap;
+  }
+
+  .tab-button svg {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+  }
+
+  .strategy-context {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 18px 4px;
+  }
+
+  .strategy-context__selection {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .strategy-context__actions {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .strategy-context__actions .text-action {
+    flex: 1;
+  }
+
+  .strategy-context__actions .icon-action {
+    width: 40px;
+    height: 40px;
   }
 
   .tab-button span {
@@ -1318,6 +1466,11 @@ input[type="checkbox"] {
     width: 100%;
   }
 
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
   .dynamic-universe-controls {
     grid-template-columns: 1fr;
   }
@@ -1328,7 +1481,6 @@ input[type="checkbox"] {
     padding-bottom: 12px;
   }
 
-  .strategy-toolbar,
   .component-row,
   .factor-control--parametric {
     grid-template-columns: 1fr;
@@ -1346,5 +1498,23 @@ input[type="checkbox"] {
   .archive-actions {
     justify-content: flex-start;
     width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .workspace-navigation .tab-button {
+    flex-direction: column;
+    gap: 3px;
+    padding: 4px 0;
+    font-size: 11px;
+  }
+
+  .strategy-context__actions {
+    gap: 6px;
+  }
+
+  .strategy-context__actions .icon-action {
+    width: 36px;
+    min-width: 36px;
   }
 }

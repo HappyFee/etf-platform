@@ -18,6 +18,8 @@ describe("App", () => {
     expect(html).toContain("样本外验证");
     expect(html).toContain("回测档案");
     expect(html).toContain("aria-current=\"page\"");
+    expect(html.match(/<select id="active-strategy"/g)).toHaveLength(1);
+    expect(html.indexOf('id="active-strategy"')).toBeLessThan(html.indexOf('aria-label="平台导航"'));
   });
 
   test("renders configurable rebalance day, ETF search, and fixed rank weights", () => {
@@ -31,14 +33,8 @@ describe("App", () => {
     };
     const html = renderToString(
       <StrategyLab
-        activeStrategyId={config.id}
         config={config}
         onChange={() => undefined}
-        onCreateBase={() => undefined}
-        onCreateComposite={() => undefined}
-        onDelete={() => undefined}
-        onDuplicate={() => undefined}
-        onSelect={() => undefined}
         profiles={etfProfiles}
         result={runBacktest({ bars: marketBars, profiles: etfProfiles, config })}
         strategies={defaultStrategies}
@@ -53,14 +49,8 @@ describe("App", () => {
   test("renders platform controls for factor instances, filters, and risk constraints", () => {
     const html = renderToString(
       <StrategyLab
-        activeStrategyId={defaultStrategy.id}
         config={defaultStrategy}
         onChange={() => undefined}
-        onCreateBase={() => undefined}
-        onCreateComposite={() => undefined}
-        onDelete={() => undefined}
-        onDuplicate={() => undefined}
-        onSelect={() => undefined}
         profiles={etfProfiles}
         result={runBacktest({ bars: marketBars, profiles: etfProfiles, config: defaultStrategy })}
         strategies={defaultStrategies}
@@ -91,6 +81,15 @@ describe("App", () => {
 
     expect(html).toContain("data-testid=\"data-source-notice\"");
     expect(html).toContain("/data/a-share-etf-bars.generated.json");
+  });
+
+  test("labels stale market data explicitly instead of presenting old signals as current", () => {
+    const html = renderToString(<DataSourceNotice generatedUrl="/data/bars.json"
+      loadStatus="loaded" latestDate="2020-01-01" />);
+    expect(html).toContain("超过 7 天未更新");
+    expect(html).toContain("历史行情");
+    expect(renderToString(<DataSourceNotice generatedUrl="/data/bars.json"
+      loadStatus="loading" latestDate="2020-01-01" />)).toBe("");
   });
 
   test("renders account controls for the active account", () => {

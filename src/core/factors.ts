@@ -1,4 +1,5 @@
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
+import { rotationRulesError } from "./rotation";
 import type {
   BaseStrategyConfig,
   EtfProfile,
@@ -51,6 +52,9 @@ function simpleReturn(bars: MarketBar[], index: number, window: number): number 
     return null;
   }
   const previous = bars[index - window].close;
+  if (!Number.isFinite(previous) || previous <= 0 || !Number.isFinite(bars[index].close) || bars[index].close <= 0) {
+    return null;
+  }
   return safeDivide(bars[index].close, previous) - 1;
 }
 
@@ -314,7 +318,14 @@ function uniqueWarnings(warnings: string[]): string[] {
 
 export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult {
   const warnings: string[] = [];
-  const requestedActiveFactors = input.config.factors.filter(
+  if (input.config.rotationRules?.enabled) {
+    const error = rotationRulesError(input.config.rotationRules);
+    if (error) return { date: input.date, rows: [], warnings: [`策略规则无效：${error}`] };
+  }
+  const requestedActiveFactors = (input.config.rotationRules?.enabled
+    ? [{ id: "return", enabled: true, weight: 1, direction: "desc" as const,
+        params: { window: input.config.rotationRules.window } }]
+    : input.config.factors).filter(
     (factor) => factor.enabled && factor.weight > 0
   );
 
@@ -339,12 +350,17 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
   const profileBySymbol = new Map(input.profiles.map((profile) => [profile.symbol, profile]));
   const rows: EvaluationRow[] = [];
 
-  for (const symbol of input.config.universe) {
+  for (const symbol of new Set(input.config.universe)) {
+    if (input.config.rotationRules?.enabled && symbol === input.config.risk.cashReplacementSymbol) continue;
     const profile = profileBySymbol.get(symbol);
     const bars = input.barsBySymbol.get(symbol);
 
     if (!profile || !bars) {
       warnings.push(`${symbol} 缺少 ETF 元数据或行情数据。`);
+      continue;
+    }
+    if (input.config.rotationRules?.enabled && bars[findBarIndexAtOrBefore(bars, input.date)]?.date !== input.date) {
+      warnings.push(`${symbol} 缺少信号日行情，不参与本期涨幅排名。`);
       continue;
     }
 
@@ -359,8 +375,16 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
       continue;
     }
 
+    const periodReturn = input.config.rotationRules?.enabled
+      ? computeFactorValue("return", bars, input.date, { window: input.config.rotationRules.window })
+      : undefined;
+    if (input.config.rotationRules?.enabled && (periodReturn == null || !Number.isFinite(periodReturn))) {
+      continue;
+    }
+
     rows.push({
       symbol,
+      periodReturn: periodReturn ?? undefined,
       name: profile.name,
       category: profile.category,
       score: 0,
@@ -403,7 +427,15 @@ export function evaluateUniverse(input: EvaluateUniverseInput): EvaluationResult
     row.score = weightTotal > 0 ? score / weightTotal : 0;
   }
 
-  rows.sort((left, right) => right.score - left.score);
+  if (input.config.rotationRules?.enabled) {
+    rows.sort((left, right) => (right.periodReturn! - left.periodReturn!) || left.symbol.localeCompare(right.symbol));
+    rows.forEach((row, index) => {
+      row.score = (rows.length - index) / rows.length;
+      row.factorScores[activeFactors[0].scoreKey].normalized = row.score;
+    });
+  } else {
+    rows.sort((left, right) => right.score - left.score);
+  }
 
   return { date: input.date, rows, warnings: uniqueWarnings(warnings) };
 }

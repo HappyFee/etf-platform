@@ -1,5 +1,6 @@
 import { Copy, ListChecks, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { RotationRulesEditor } from "./RotationRulesEditor";
 import {
   defaultBenchmarkSymbol,
   universeEqualWeightBenchmark
@@ -475,57 +476,6 @@ function updateComponentWeight(
   };
 }
 
-function StrategyToolbar({
-  strategies,
-  activeStrategyId,
-  onSelect,
-  onCreateBase,
-  onCreateComposite,
-  onDuplicate,
-  onDelete
-}: {
-  strategies: StrategyConfig[];
-  activeStrategyId: string;
-  onSelect: (id: string) => void;
-  onCreateBase: () => void;
-  onCreateComposite: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <Section title="策略工作区" action={<span className="section-note">{strategies.length} 个策略</span>}>
-      <div className="strategy-toolbar">
-        <label>
-          当前策略
-          <select value={activeStrategyId} onChange={(event) => onSelect(event.target.value)}>
-            {strategies.map((strategy) => (
-              <option key={strategy.id} value={strategy.id}>
-                {strategy.name} · {strategy.kind === "composite" ? "组合" : "基础"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="text-action" onClick={onCreateBase} type="button">
-          <Plus size={16} />
-          新基础策略
-        </button>
-        <button className="text-action" onClick={onCreateComposite} type="button">
-          <Plus size={16} />
-          新组合策略
-        </button>
-        <button className="text-action" onClick={onDuplicate} type="button">
-          <Copy size={16} />
-          复制
-        </button>
-        <button className="text-action danger" onClick={onDelete} type="button">
-          <Trash2 size={16} />
-          删除
-        </button>
-      </div>
-    </Section>
-  );
-}
-
 function BaseStrategyEditor({
   config,
   result,
@@ -598,6 +548,7 @@ function BaseStrategyEditor({
           <label>
             调仓频率
             <select
+              data-testid="rebalance-frequency"
               value={config.rebalance.frequency}
               onChange={(event) =>
                 onChange({
@@ -612,8 +563,17 @@ function BaseStrategyEditor({
               <option value="daily">每日</option>
               <option value="weekly">每周</option>
               <option value="monthly">每月</option>
+              <option value="interval">每 N 个交易日</option>
             </select>
           </label>
+          {config.rebalance.frequency === "interval" && (
+            <label>轮动间隔（交易日）
+              <input data-testid="rebalance-interval" type="number" min={1} max={250}
+                value={config.rebalance.intervalDays ?? 5}
+                onChange={event => onChange({ ...config, rebalance: { ...config.rebalance,
+                  intervalDays: Math.round(boundedNumber(Number(event.target.value), 5, 1, 250)) } })} />
+            </label>
+          )}
           {config.rebalance.frequency === "weekly" && (
             <label>
               调仓周几
@@ -662,16 +622,17 @@ function BaseStrategyEditor({
             </label>
           )}
           <label>
-            持仓数量
+            最大持仓数量（只）
             <input
-              max={6}
+              data-testid="maximum-positions"
+              max={100}
               min={1}
               type="number"
               value={config.portfolio.topN}
               onChange={(event) =>
                 {
                   const topN = Math.round(
-                    boundedNumber(Number(event.target.value), config.portfolio.topN, 1, 6)
+                    boundedNumber(Number(event.target.value), config.portfolio.topN, 1, 100)
                   );
 
                   onChange({
@@ -688,6 +649,12 @@ function BaseStrategyEditor({
                 }
               }
             />
+          </label>
+          <label>目标持仓比例（%）
+            <input data-testid="invested-weight" type="number" min={0} max={100} step={1}
+              value={Number(((config.portfolio.investedWeight ?? 1) * 100).toFixed(4))}
+              onChange={event => onChange({ ...config, portfolio: { ...config.portfolio,
+                investedWeight: boundedNumber(Number(event.target.value), 100, 0, 100) / 100 } })} />
           </label>
           <label>
             仓位方式
@@ -708,7 +675,7 @@ function BaseStrategyEditor({
               }
             >
               <option value="equal">等权</option>
-              <option value="score">按得分</option>
+              <option value="score">{config.rotationRules?.enabled ? "按排名" : "按得分"}</option>
               <option value="fixed">固定比例</option>
             </select>
           </label>
@@ -865,6 +832,8 @@ function BaseStrategyEditor({
           </div>
         )}
       </Section>
+
+      <RotationRulesEditor config={config} onChange={onChange} />
 
       <Section
         title="成交模型"
@@ -1174,7 +1143,7 @@ function BaseStrategyEditor({
         )}
       </Section>
 
-      <Section
+      {!config.rotationRules?.enabled && <Section
         title="因子权重与参数"
         action={
           <div className="inline-actions">
@@ -1311,7 +1280,7 @@ function BaseStrategyEditor({
             );
           })}
         </div>
-      </Section>
+      </Section>}
 
       <Section
         title="筛选条件"
@@ -1596,38 +1565,16 @@ export function StrategyLab({
   result,
   profiles,
   strategies,
-  activeStrategyId,
-  onSelect,
-  onChange,
-  onCreateBase,
-  onCreateComposite,
-  onDuplicate,
-  onDelete
+  onChange
 }: {
   config: StrategyConfig;
   result: BacktestResult;
   profiles: EtfProfile[];
   strategies: StrategyConfig[];
-  activeStrategyId: string;
-  onSelect: (id: string) => void;
   onChange: (config: StrategyConfig) => void;
-  onCreateBase: () => void;
-  onCreateComposite: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
 }) {
   return (
     <div className="lab-grid">
-      <StrategyToolbar
-        activeStrategyId={activeStrategyId}
-        onCreateBase={onCreateBase}
-        onCreateComposite={onCreateComposite}
-        onDelete={onDelete}
-        onDuplicate={onDuplicate}
-        onSelect={onSelect}
-        strategies={strategies}
-      />
-
       {config.kind === "composite" ? (
         <CompositeStrategyEditor
           config={config}

@@ -57,6 +57,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
             />
             <Tooltip formatter={(value) => formatPercent(Number(value) - 1, 1)} />
             <Line
+              isAnimationActive={false}
               type="monotone"
               dataKey="equity"
               name="策略净值"
@@ -65,6 +66,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
               dot={false}
             />
             <Line
+              isAnimationActive={false}
               type="monotone"
               dataKey="benchmark"
               name={result.benchmark?.name ?? "对比基准"}
@@ -86,6 +88,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
             <YAxis tick={{ fontSize: 12 }} width={42} />
             <Tooltip formatter={(value) => `${Number(value).toFixed(2)}%`} />
             <Area
+              isAnimationActive={false}
               dataKey="drawdown"
               fill="#d15c4f"
               fillOpacity={0.22}
@@ -97,7 +100,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
       </div>
 
       <div className="chart-panel">
-        <div className="chart-title">当前仓位</div>
+        <div className="chart-title">最新目标仓位</div>
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={allocationData} layout="vertical">
             <CartesianGrid stroke="#e4ecef" horizontal={false} />
@@ -109,7 +112,7 @@ export function BacktestCharts({ result }: { result: BacktestResult }) {
               width={78}
             />
             <Tooltip formatter={(value) => `${Number(value).toFixed(1)}%`} />
-            <Bar dataKey="weight" radius={[0, 4, 4, 0]}>
+            <Bar dataKey="weight" radius={[0, 4, 4, 0]} isAnimationActive={false}>
               {allocationData.map((item) => (
                 <Cell key={item.name} fill={item.color} />
               ))}

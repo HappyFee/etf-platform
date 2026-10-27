@@ -16,6 +16,8 @@ The project can run as a static web app on GitHub Pages, Vercel, Netlify, or Clo
 - Add, duplicate, remove, enable, disable, and reweight factor instances from the UI
 - Configurable pre-ranking filters, including threshold and range filters
 - Daily, weekly, and monthly rebalance schedules with selected weekday or calendar day
+- Trading-day interval schedules and optional return-ranked rotation (20 trading days by default)
+- Independent buy rank/return ranges and new-position limits; sell rank/return conditions with any/all matching
 - Equal-weight, score-weight, and fixed rank-based allocation
 - Risk constraints such as maximum single-position weight, minimum cash weight, and an optional idle-cash replacement ETF
 - Saved backtest date ranges and selectable ETF or universe-equal-weight benchmarks
@@ -134,6 +136,8 @@ A base strategy contains:
 - `filters`: pre-ranking rules such as liquidity thresholds or volatility ranges
 - `rebalance`: daily, weekly, or monthly schedule
 - `portfolio`: Top N, weighting method, and optional fixed rank weights
+- `portfolio.investedWeight`: target strategy allocation from 0 to 1; the remainder uses the replacement asset or cash
+- `rotationRules`: optional return lookback, buy conditions, and sell conditions; replaces factor scoring with descending period returns while preserving pre-ranking filters
 - `transactionCostBps`: one-way cost applied to actual traded notional
 - `benchmarkSymbol`: selected ETF benchmark, or the universe-equal-weight option
 - `backtestStartDate` / `backtestEndDate`: optional saved evaluation window
@@ -150,6 +154,10 @@ A composite strategy contains:
 - `risk`: cash return assumption
 
 Factors are parameterized. For example, the same `volatility` factor can be used with `window: 20`, `window: 50`, or any supported window without creating new hard-coded factor ids.
+
+Buy ranges are inclusive; sell conditions use strict rank/return comparisons and ignore blank conditions. Incumbents can stay outside the buy range until a sell condition fires. New-buy quantity counts ETF symbols, not shares. The strategy position cap excludes the idle-cash replacement asset. Ineligible or missing-data positions are targeted for exit at the next rotation, subject to actual execution constraints; symbols sold in that cycle cannot immediately reenter. Conditions are evaluated at the signal close and executed through the existing T+1 model. Trading-day intervals are anchored to the actual backtest start.
+
+Sell conditions veto conflicting buys, including new entries. Retained positions do not consume the new-buy allowance. Orders are net target-minus-current weight changes, with no commission for unchanged weights. Return comparisons tolerate floating-point error of `1e-10`. The replacement asset is excluded from rotation ranks; tied returns use symbol order, and rank weights remain positive. Failed or partial sells keep occupying actual position slots and allocation budgets. Missing execution quotes, stopped close-session volume, and invalid constrained turnover cannot generate fictional fills. Open orders use preceding-day turnover only. Weights drift with prices between actual rebalances, and off-cycle signals retain the actual portfolio. Invalid rule parameters produce explicit errors and no orders. These corrections can change new backtest results; saved snapshots remain unchanged. Execution still models continuous weights rather than broker round lots or an order book.
 
 ## Deployment
 

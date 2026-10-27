@@ -9,7 +9,7 @@ export type FactorCategory =
 
 export type FilterOperator = ">" | ">=" | "<" | "<=" | "between";
 
-export type RebalanceFrequency = "daily" | "weekly" | "monthly";
+export type RebalanceFrequency = "daily" | "weekly" | "monthly" | "interval";
 
 export type WeightingMethod = "equal" | "score" | "fixed";
 
@@ -113,14 +113,34 @@ export interface FilterRule {
 
 export interface RebalanceConfig {
   frequency: RebalanceFrequency;
+  intervalDays?: number;
   weeklyDay?: number;
   monthlyDay?: number;
 }
 
 export interface PortfolioConfig {
   topN: number;
+  investedWeight?: number;
   weighting: WeightingMethod;
   fixedWeights?: number[];
+}
+
+export interface RotationRules {
+  enabled: boolean;
+  window: number;
+  buy: {
+    rankFrom: number;
+    rankTo: number;
+    minReturn?: number;
+    maxReturn?: number;
+    maxNewPositions: number;
+  };
+  sell: {
+    rankBelow?: number;
+    returnBelow?: number;
+    returnAbove?: number;
+    match: "any" | "all";
+  };
 }
 
 export interface RiskConfig {
@@ -152,6 +172,7 @@ export interface BaseStrategyConfig extends BacktestSettings {
   description: string;
   universe: string[];
   universeSelection?: DynamicUniverseConfig;
+  rotationRules?: RotationRules;
   factors: FactorSelection[];
   filters: FilterRule[];
   rebalance: RebalanceConfig;
@@ -210,6 +231,7 @@ export interface FactorScoreDetail {
 }
 
 export interface EvaluationRow {
+  periodReturn?: number;
   symbol: string;
   name: string;
   category: string;

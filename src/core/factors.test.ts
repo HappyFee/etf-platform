@@ -2,8 +2,39 @@ import { describe, expect, test } from "vitest";
 import { evaluateUniverse, factorCatalog } from "./factors";
 import { defaultStrategy } from "./defaultStrategy";
 import { etfProfiles, groupBarsBySymbol, marketBars } from "./sampleData";
+import { defaultRotationRules } from "./rotation";
 
 describe("factor engine", () => {
+  test("tied return ranks and rank weights stay deterministic when the input pool order changes", () => {
+    const profiles = etfProfiles.filter(p => ["510300", "510500"].includes(p.symbol));
+    const oneHistory = marketBars.filter(b => b.symbol === "510300").slice(0, 30);
+    const barsBySymbol = groupBarsBySymbol([
+      ...oneHistory, ...oneHistory.map(b => ({ ...b, symbol: "510500" }))
+    ]);
+    const date = oneHistory.at(-1)!.date;
+    const config = { ...defaultStrategy, filters: [], universe: ["510500", "510300"], rotationRules: defaultRotationRules };
+    const forward = evaluateUniverse({ profiles, barsBySymbol, date, config });
+    const reverse = evaluateUniverse({ profiles, barsBySymbol, date, config: { ...config, universe: ["510300", "510500"] } });
+    expect(forward.rows.map(r => [r.symbol, r.score])).toEqual(reverse.rows.map(r => [r.symbol, r.score]));
+    expect(forward.rows.map(r => r.symbol)).toEqual(["510300", "510500"]);
+    expect(forward.rows.every(r => r.score > 0)).toBe(true);
+  });
+  test("return ranks require a current valid quote and exclude replacement assets and duplicate symbols", () => {
+    const profiles = etfProfiles.filter(p => ["510300", "510500", "511880"].includes(p.symbol));
+    const date = "2026-01-30";
+    const bars = profiles.flatMap(p => Array.from({ length: 21 }, (_, i) => ({
+      symbol: p.symbol, date: i === 20 ? date : `2026-01-${String(i + 1).padStart(2, "0")}`,
+      open: 100, high: 100, low: 100, close: i === 20 ? 130 : 100, volume: 100, amount: 10000
+    }))).filter(b => !(b.symbol === "510500" && b.date === date));
+    const config = { ...defaultStrategy, universe: ["511880", "510300", "510300", "510500"],
+      filters: [], rotationRules: defaultRotationRules };
+    const result = evaluateUniverse({ profiles, barsBySymbol: groupBarsBySymbol(bars), config, date });
+    expect(result.rows.map(r => r.symbol)).toEqual(["510300"]);
+    expect(result.rows[0].periodReturn).toBeCloseTo(0.3);
+    expect(result.warnings.some(w => w.includes("信号日行情"))).toBe(true);
+    const invalid = bars.map(b => b.symbol === "510300" && b.date === date ? { ...b, close: 0 } : b);
+    expect(evaluateUniverse({ profiles, barsBySymbol: groupBarsBySymbol(invalid), config, date }).rows).toEqual([]);
+  });
   test("uses one generic factor definition with different window parameters", () => {
     const grouped = groupBarsBySymbol(marketBars);
     const bars = grouped.get("510300")!;

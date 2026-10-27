@@ -2,6 +2,12 @@ import { describe, expect, test } from "vitest";
 import { nextRebalanceHint, shouldRebalance } from "./date";
 
 describe("rebalance schedule", () => {
+  test("counts interval cycles from the backtest start even when all positions are cash", () => {
+    const dates = ["2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22"];
+    expect(dates.map((_, i) => shouldRebalance(dates, i, { frequency: "interval", intervalDays: 2 }, false, 1)))
+      .toEqual([false, true, false, true, false]);
+    expect(nextRebalanceHint({ frequency: "interval", intervalDays: 5 })).toContain("5 个交易日");
+  });
   test("rebalances weekly on the selected weekday", () => {
     const dates = ["2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22"];
 

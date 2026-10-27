@@ -8,8 +8,38 @@ import {
 } from "./defaultStrategy";
 import { etfProfiles, marketBars } from "./sampleData";
 import { defaultDynamicUniverseConfig } from "./universeSelection";
+import { defaultRotationRules } from "./rotation";
 
 describe("backtest engine", () => {
+  test("executes return-ranked buy/sell rules with position and allocation limits on scheduled cycles", () => {
+    const config = {
+      ...defaultStrategy,
+      factors: [], filters: [],
+      backtestStartDate: "2026-01-05", backtestEndDate: "2026-05-20",
+      rotationRules: { ...defaultRotationRules, buy: { rankFrom: 1, rankTo: 12, maxNewPositions: 1 } },
+      rebalance: { frequency: "interval" as const, intervalDays: 5 },
+      portfolio: { topN: 2, weighting: "equal" as const, investedWeight: 0.6 },
+      risk: { ...defaultStrategy.risk, maxPositionWeight: 0.5 },
+      execution: { ...defaultStrategy.execution!, maxParticipationRate: 1, minimumCommission: 0 }
+    };
+    const result = runBacktest({ bars: marketBars, profiles: etfProfiles, config });
+    expect(result.rebalances.length).toBeGreaterThan(5);
+    expect(result.latestSignal.rankings.every(r => r.periodReturn !== undefined)).toBe(true);
+    expect(result.latestSignal.rankings.map(r => r.periodReturn!))
+      .toEqual(result.latestSignal.rankings.map(r => r.periodReturn!).sort((a, b) => b - a));
+    for (const event of result.rebalances) {
+      const risky = event.holdings.filter(h => h.symbol !== "511880");
+      expect(risky.length).toBeLessThanOrEqual(2);
+      expect(risky.reduce((sum, h) => sum + h.weight, 0)).toBeLessThanOrEqual(0.600001);
+      expect(event.signalDate! < event.tradeDate!).toBe(true);
+    }
+    expect(result.rebalances[0].holdings.filter(h => h.symbol !== "511880")).toHaveLength(1);
+    const signalDate = result.rebalances[2].signalDate!;
+    const replay = runBacktest({ bars: marketBars.filter(b => b.date <= signalDate), profiles: etfProfiles,
+      config: { ...config, backtestEndDate: signalDate } });
+    expect(replay.latestSignal.rankings.map(r => r.symbol))
+      .toEqual(result.rebalances[2].rankings.map(r => r.symbol));
+  });
   test("runs a complete weekly ETF rotation backtest with metrics and signals", () => {
     const result = runBacktest({
       bars: marketBars,

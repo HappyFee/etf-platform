@@ -17,6 +17,8 @@ function strategySummary(config: StrategyConfig, rebalanceCount: number): string
   const rebalanceLabel =
     config.rebalance.frequency === "daily"
       ? "每日调仓"
+      : config.rebalance.frequency === "interval"
+        ? `每 ${config.rebalance.intervalDays ?? 5} 个交易日轮动`
       : config.rebalance.frequency === "weekly"
         ? `每周${["", "一", "二", "三", "四", "五"][config.rebalance.weeklyDay ?? 1]}调仓`
         : `每月${config.rebalance.monthlyDay ?? 1}日调仓`;
@@ -131,7 +133,7 @@ export function Dashboard({
           <div className="assumption-list">
             <span>口径：信号与成交分离</span>
             <span>信号：调仓日收盘后生成</span>
-            <span>成交：下一交易日收盘切仓</span>
+            <span>成交：下一交易日{config.execution?.price === "next_open" ? "开盘" : "收盘"}切仓</span>
             <span>
               成本：手续费 {config.transactionCostBps} bps + 滑点{" "}
               {config.execution?.slippageBps ?? 3} bps

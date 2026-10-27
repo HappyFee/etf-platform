@@ -1,11 +1,9 @@
 import {
-  Activity,
   AlertTriangle,
   BarChart3,
   BellRing,
   ChevronDown,
   Database,
-  Layers3,
   LibraryBig,
   LogOut,
   Mail,
@@ -22,6 +20,7 @@ import { Dashboard } from "./components/Dashboard";
 import { FactorLibrary } from "./components/FactorLibrary";
 import { SignalPanel } from "./components/SignalPanel";
 import { StrategyLab } from "./components/StrategyLab";
+import { StrategySwitcher } from "./components/StrategySwitcher";
 import {
   buildDataQualityReport,
   buildRobustnessReport,
@@ -145,12 +144,18 @@ function initialWorkspace(storage: StorageLike | null, account: AccountProfile) 
 
 export function DataSourceNotice({
   generatedUrl,
-  loadStatus
+  loadStatus,
+  latestDate
 }: {
   generatedUrl: string;
   loadStatus: DataLoadStatus;
+  latestDate?: string;
 }) {
-  if (loadStatus !== "failed") {
+  const ageDays = latestDate
+    ? (Date.now() - Date.parse(`${latestDate}T00:00:00+08:00`)) / 86_400_000
+    : 0;
+  const stale = loadStatus === "loaded" && ageDays >= 7;
+  if (loadStatus !== "failed" && !stale) {
     return null;
   }
 
@@ -158,8 +163,10 @@ export function DataSourceNotice({
     <div className="data-source-notice" data-testid="data-source-notice" role="status">
       <AlertTriangle size={16} />
       <span>
-        真实行情数据加载失败，当前使用演示数据。请检查生成文件是否可访问：{generatedUrl}
+        {stale ? `行情截至 ${latestDate}，已超过 7 天未更新。当前回测和信号使用的是历史行情。`
+          : "真实行情数据加载失败，当前使用演示数据。"}
       </span>
+      {loadStatus === "failed" && <a href={generatedUrl} target="_blank" rel="noreferrer">查看行情文件</a>}
     </div>
   );
 }
@@ -526,20 +533,9 @@ export function App() {
     [activeStrategyId, strategies]
   );
 
-  const result = useMemo(
-    () =>
-      runBacktest({
-        bars: dataset.bars,
-        profiles: dataset.profiles,
-        config,
-        strategyBook: strategies,
-        universeSnapshots: dataset.universeSnapshots
-      }),
-    [config, dataset, strategies]
-  );
   const deferredConfig = useDeferredValue(config);
   const deferredStrategies = useDeferredValue(strategies);
-  const analysisResult = useMemo(
+  const result = useMemo(
     () =>
       runBacktest({
         bars: dataset.bars,
@@ -548,8 +544,10 @@ export function App() {
         strategyBook: deferredStrategies,
         universeSnapshots: dataset.universeSnapshots
       }),
-    [dataset, deferredConfig, deferredStrategies]
+    [deferredConfig, dataset, deferredStrategies]
   );
+  const calculationPending = config !== deferredConfig || strategies !== deferredStrategies;
+  const resultsPending = calculationPending || dataLoadStatus === "loading";
   const dataLatestDate = dataset.latestDate ?? result.latestSignal.date;
   const dataQuality = useMemo(
     () => buildDataQualityReport(dataset.bars, dataset.profiles),
@@ -574,9 +572,9 @@ export function App() {
         config: deferredConfig,
         strategyBook: deferredStrategies,
         universeSnapshots: dataset.universeSnapshots,
-        result: analysisResult
+        result
       }),
-    [analysisResult, dataset, deferredConfig, deferredStrategies]
+    [result, dataset, deferredConfig, deferredStrategies]
   );
   const isDemoDataset = dataset.source.startsWith("demo");
   const symbolCoverage =
@@ -782,7 +780,8 @@ export function App() {
   }
 
   function deleteActiveStrategy() {
-    if (strategies.length <= 1) {
+    if (strategies.length <= 1 || strategies.some(strategy => strategy.kind === "composite" &&
+      strategy.components.some(component => component.strategyId === config.id))) {
       return;
     }
     const remaining = strategies.filter((strategy) => strategy.id !== config.id);
@@ -821,36 +820,29 @@ export function App() {
     setSnapshots((current) => current.filter((snapshot) => snapshot.id !== snapshotId));
   }
 
+  function navigateTo(tab: TabKey) {
+    setActiveTab(tab);
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
   return (
     <main className="app-shell">
       <header className="top-band">
         <div className="top-band__content">
           <div>
-            <p className="eyebrow">A股 ETF 策略工厂</p>
-            <h1>{config.name}</h1>
-            <p className="subtitle">{config.description}</p>
+            <h1>ETF 策略平台</h1>
+            <p className="subtitle">策略研究 · 回测 · 信号跟踪</p>
           </div>
           <div className="top-band__side">
             <div className="status-stack" aria-label="策略状态">
-              <span className="status-chip status-chip--primary">
-                <Activity size={16} />
-                {result.latestSignal.date}
-              </span>
               <span className={isDemoDataset ? "status-chip status-chip--warn" : "status-chip"}>
                 <Database size={16} />
-                数据截至 {dataLatestDate}
+                {dataLoadStatus === "loading" ? "加载行情中" : `数据截至 ${dataLatestDate}`}
               </span>
               <span className="status-chip status-chip--secondary">
-                {isDemoDataset ? "演示数据" : dataset.source}
+                {isDemoDataset ? "演示数据" : "真实行情"}
               </span>
               <span className="status-chip status-chip--secondary">ETF {symbolCoverage}</span>
-              <span className="status-chip">
-                <Layers3 size={16} />
-                {config.kind === "composite" ? "组合策略" : "基础策略"}
-              </span>
-              <strong className="status-chip status-chip--strong">
-                {result.latestSignal.holdings.length} 个持仓
-              </strong>
             </div>
             <AccountPanel
               account={account}
@@ -869,7 +861,7 @@ export function App() {
         </div>
       </header>
 
-      <DataSourceNotice generatedUrl={generatedUrl} loadStatus={dataLoadStatus} />
+      <DataSourceNotice generatedUrl={generatedUrl} loadStatus={dataLoadStatus} latestDate={dataLatestDate} />
       {accountNotice && (
         <div className="data-source-notice" role="status">
           <AlertTriangle size={16} />
@@ -877,7 +869,12 @@ export function App() {
         </div>
       )}
 
-      <nav className="tab-bar" aria-label="平台导航">
+      <div className="workspace-navigation">
+        <StrategySwitcher strategies={strategies} config={config} onSelect={setActiveStrategyId}
+          onEdit={() => navigateTo("lab")} onCreateBase={createBaseStrategy}
+          onCreateComposite={createCompositeStrategy} onDuplicate={duplicateActiveStrategy}
+          onDelete={deleteActiveStrategy} />
+        <nav className="tab-bar" aria-label="平台导航">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -885,7 +882,7 @@ export function App() {
               className={activeTab === tab.key ? "tab-button active" : "tab-button"}
               aria-current={activeTab === tab.key ? "page" : undefined}
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => navigateTo(tab.key)}
               type="button"
             >
               <Icon size={18} />
@@ -893,9 +890,15 @@ export function App() {
             </button>
           );
         })}
-      </nav>
+        </nav>
+      </div>
 
-      <div className="workspace">
+      <div className="workspace" aria-busy={resultsPending}>
+        {resultsPending && <div className="calculation-notice" role="status">
+          {dataLoadStatus === "loading" ? "正在加载行情数据…" : `正在更新「${config.name}」的回测与信号…`}
+        </div>}
+        <div className={resultsPending && activeTab !== "lab"
+          ? "workspace-content workspace-content--pending" : "workspace-content"}>
         {activeTab === "overview" && (
           <Dashboard
             archive={
@@ -908,7 +911,7 @@ export function App() {
               />
             }
             result={result}
-            config={config}
+            config={deferredConfig}
             dataQuality={dataQuality}
             robustness={robustness}
             validation={validation}
@@ -922,17 +925,12 @@ export function App() {
             result={result}
             profiles={dataset.profiles}
             strategies={strategies}
-            activeStrategyId={activeStrategyId}
-            onSelect={setActiveStrategyId}
             onChange={updateActiveStrategy}
-            onCreateBase={createBaseStrategy}
-            onCreateComposite={createCompositeStrategy}
-            onDuplicate={duplicateActiveStrategy}
-            onDelete={deleteActiveStrategy}
           />
         )}
         {activeTab === "factors" && <FactorLibrary config={config} />}
         {activeTab === "signals" && <SignalPanel result={result} />}
+        </div>
       </div>
     </main>
   );

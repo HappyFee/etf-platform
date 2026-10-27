@@ -94,8 +94,13 @@ export function shouldRebalance(
   dates: string[],
   index: number,
   config: RebalanceConfig,
-  hasHoldings: boolean
+  hasHoldings: boolean,
+  startIndex = 0
 ): boolean {
+  if (config.frequency === "interval") {
+    const interval = boundedInteger(config.intervalDays, 5, 1, 250);
+    return index >= startIndex && (index - startIndex) % interval === 0;
+  }
   if (!hasHoldings) {
     return true;
   }
@@ -121,6 +126,9 @@ export function shouldRebalance(
 }
 
 export function nextRebalanceHint(config: RebalanceConfig): string {
+  if (config.frequency === "interval") {
+    return `每 ${boundedInteger(config.intervalDays, 5, 1, 250)} 个交易日轮动`;
+  }
   if (config.frequency === "daily") {
     return "下一个交易日";
   }

@@ -1,6 +1,7 @@
 import { nextRebalanceHint, shouldRebalance } from "./date";
 import { defaultBenchmarkSymbol, universeEqualWeightBenchmark } from "./defaultStrategy";
 import { evaluateUniverse } from "./factors";
+import { rotationRulesError, selectRotationRows } from "./rotation";
 import { maxDrawdown, mean, rollingReturns, safeDivide, standardDeviation } from "./math";
 import { groupBarsBySymbol } from "./sampleData";
 import {
@@ -37,6 +38,10 @@ interface RunBacktestInput {
 interface DailyPortfolioReturn {
   dailyReturn: number;
   warnings: string[];
+}
+
+interface MarkedPortfolioReturn extends DailyPortfolioReturn {
+  holdings: Holding[];
 }
 
 interface ResolvedExecutionConfig {
@@ -151,31 +156,39 @@ function portfolioPeriodReturn(
   holdings: Holding[],
   cashReturnAnnual: number,
   dayFraction = 1
-): DailyPortfolioReturn {
+): MarkedPortfolioReturn {
   const cashPeriodReturn = (cashReturnAnnual / 252) * dayFraction;
 
   if (holdings.length === 0) {
-    return { dailyReturn: cashPeriodReturn, warnings: [] };
+    return { dailyReturn: cashPeriodReturn, warnings: [], holdings: [] };
   }
 
   const warnings: string[] = [];
   const investedWeight = holdings.reduce((total, holding) => total + holding.weight, 0);
   const cashWeight = Math.max(0, 1 - investedWeight);
-  const dailyReturn = holdings.reduce((total, holding) => {
+  const marked = holdings.map((holding) => {
     const startBar = marketLookup.getBar(holding.symbol, startDate);
     const endBar = marketLookup.getBar(holding.symbol, endDate);
     const startPrice = startBar?.[startField];
     const endPrice = endBar?.[endField];
-    if (!startPrice || !endPrice) {
+    if (!Number.isFinite(startPrice) || !Number.isFinite(endPrice) || startPrice! <= 0 || endPrice! <= 0) {
       warnings.push(
         `${endDate} ${holding.symbol} 缺少行情，按现金收益处理。`
       );
-      return total + holding.weight * cashPeriodReturn;
+      return { ...holding, weight: holding.weight * (1 + cashPeriodReturn) };
     }
-    return total + holding.weight * (endPrice / startPrice - 1);
-  }, cashWeight * cashPeriodReturn);
+    return { ...holding, weight: holding.weight * (endPrice! / startPrice!) };
+  });
+  const portfolioGrowth = marked.reduce((total, holding) => total + holding.weight,
+    cashWeight * (1 + cashPeriodReturn));
 
-  return { dailyReturn, warnings };
+  return {
+    dailyReturn: portfolioGrowth - 1,
+    warnings,
+    holdings: portfolioGrowth > 0
+      ? marked.map(holding => ({ ...holding, weight: holding.weight / portfolioGrowth }))
+      : []
+  };
 }
 
 function dailyPortfolioReturn(
@@ -211,9 +224,12 @@ function isBaseStrategy(config: StrategyConfig): config is BaseStrategyConfig {
 function holdingsFromRows(
   rows: EvaluationRow[],
   config: BaseStrategyConfig,
-  profiles: EtfProfile[]
+  profiles: EtfProfile[],
+  previous: Holding[] = []
 ): Holding[] {
-  const selected = rows.slice(0, Math.max(0, config.portfolio.topN));
+  const selected = config.rotationRules?.enabled
+    ? selectRotationRows(rows, previous, config.rotationRules, config.portfolio.topN, config.risk.cashReplacementSymbol)
+    : rows.slice(0, Math.max(0, config.portfolio.topN));
   const profileBySymbol = new Map(profiles.map((profile) => [profile.symbol, profile]));
   if (selected.length === 0) {
     return applyCashReplacement([], config, profileBySymbol);
@@ -300,7 +316,7 @@ function applyRiskConstraints(
   }
 
   const minCashWeight = Math.min(1, Math.max(0, config.risk.minCashWeight ?? 0));
-  const targetInvestedWeight = Math.max(0, 1 - minCashWeight);
+  const targetInvestedWeight = Math.min(1 - minCashWeight, Math.max(0, config.portfolio.investedWeight ?? 1));
   const maxPositionWeight = Math.min(
     targetInvestedWeight,
     Math.max(0, config.risk.maxPositionWeight ?? targetInvestedWeight)
@@ -316,29 +332,17 @@ function applyRiskConstraints(
   }));
 
   for (let iteration = 0; iteration < next.length; iteration += 1) {
-    const overweight = next.filter((holding) => holding.weight > maxPositionWeight);
-    if (overweight.length === 0) {
-      break;
-    }
-
-    const excess = overweight.reduce(
-      (total, holding) => total + holding.weight - maxPositionWeight,
-      0
-    );
-    next = next.map((holding) =>
-      holding.weight > maxPositionWeight
-        ? { ...holding, weight: maxPositionWeight }
-        : holding
-    );
-
-    const receivers = next.filter((holding) => holding.weight < maxPositionWeight);
+    next = next.map(holding => ({ ...holding, weight: Math.min(maxPositionWeight, holding.weight) }));
+    const excess = targetInvestedWeight - next.reduce((total, holding) => total + holding.weight, 0);
+    if (excess <= 1e-12) break;
+    const receivers = next.filter((holding) => holding.weight < maxPositionWeight - 1e-12);
     const receiverTotal = receivers.reduce((total, holding) => total + holding.weight, 0);
     if (receivers.length === 0 || receiverTotal <= 0) {
       break;
     }
 
     next = next.map((holding) => {
-      if (holding.weight >= maxPositionWeight) {
+      if (holding.weight >= maxPositionWeight - 1e-12) {
         return holding;
       }
       const addWeight = excess * (holding.weight / receiverTotal);
@@ -411,11 +415,11 @@ function orderCapacityWeight(
 
   const liquidityDate = execution.price === "next_open" ? previousDate : tradeDate;
   const amount = marketLookup.getBar(symbol, liquidityDate)?.amount;
-  if (!amount || amount <= 0) {
-    return Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(amount) || amount! <= 0) {
+    return 0;
   }
 
-  return (amount * execution.maxParticipationRate) / Math.max(1, portfolioValue);
+  return (amount! * execution.maxParticipationRate) / Math.max(1, portfolioValue);
 }
 
 function executeRebalance({
@@ -426,7 +430,10 @@ function executeRebalance({
   tradeDate,
   portfolioValue,
   transactionCostBps,
-  execution
+  execution,
+  maximumPositions,
+  maximumInvestedWeight,
+  replacementSymbol
 }: {
   previous: Holding[];
   target: Holding[];
@@ -436,8 +443,11 @@ function executeRebalance({
   portfolioValue: number;
   transactionCostBps: number;
   execution: ResolvedExecutionConfig;
+  maximumPositions?: number;
+  maximumInvestedWeight?: number;
+  replacementSymbol?: string;
 }): RebalanceExecution {
-  const epsilon = 0.0001;
+  const epsilon = 1e-10;
   const previousMap = new Map(previous.map((holding) => [holding.symbol, holding]));
   const targetMap = new Map(target.map((holding) => [holding.symbol, holding]));
   const nextMap = new Map(
@@ -452,6 +462,15 @@ function executeRebalance({
   let priceLimitBlocks = 0;
   let volumeLimits = 0;
   let cashLimits = 0;
+  let missingQuotes = 0;
+  let positionLimits = 0;
+  let allocationLimits = 0;
+  function canTrade(symbol: string): boolean {
+    const bar = marketLookup.getBar(symbol, tradeDate);
+    const price = execution.price === "next_open" ? bar?.open : bar?.close;
+    return Number.isFinite(price) && price! > 0 &&
+      (execution.price === "next_open" || (Number.isFinite(bar?.volume) && bar!.volume > 0));
+  }
 
   for (const symbol of symbols) {
     const current = nextMap.get(symbol);
@@ -462,6 +481,10 @@ function executeRebalance({
     }
 
     const requested = previousWeight - targetWeight;
+    if (!canTrade(symbol)) {
+      missingQuotes += 1;
+      continue;
+    }
     if (
       tradeBlockedByPriceLimit(
         marketLookup,
@@ -488,6 +511,9 @@ function executeRebalance({
     if (filled < requested - epsilon) {
       volumeLimits += 1;
     }
+    if (filled <= epsilon) {
+      continue;
+    }
     if (current) {
       nextMap.set(symbol, { ...current, weight: previousWeight - filled });
     }
@@ -507,6 +533,17 @@ function executeRebalance({
     }
 
     const requested = targetWeight - previousWeight;
+    if (!canTrade(symbol)) {
+      missingQuotes += 1;
+      continue;
+    }
+    const actualPositionCount = [...nextMap.values()].filter(holding =>
+      holding.symbol !== replacementSymbol && holding.weight > epsilon).length;
+    if (maximumPositions !== undefined && symbol !== replacementSymbol &&
+      (nextMap.get(symbol)?.weight ?? 0) <= epsilon && actualPositionCount >= maximumPositions) {
+      positionLimits += 1;
+      continue;
+    }
     if (
       tradeBlockedByPriceLimit(
         marketLookup,
@@ -533,8 +570,14 @@ function executeRebalance({
     if (liquidityFilled < requested - epsilon) {
       volumeLimits += 1;
     }
-    const filled = Math.min(liquidityFilled, availableCash);
-    if (filled < liquidityFilled - epsilon) {
+    const currentInvestedWeight = [...nextMap.values()].reduce((sum, holding) =>
+      sum + (holding.symbol === replacementSymbol ? 0 : holding.weight), 0);
+    const allocationCapacity = symbol === replacementSymbol ? Number.POSITIVE_INFINITY
+      : Math.max(0, (maximumInvestedWeight ?? 1) - currentInvestedWeight);
+    const allocationFilled = Math.min(liquidityFilled, allocationCapacity);
+    if (allocationFilled < liquidityFilled - epsilon) allocationLimits += 1;
+    const filled = Math.min(allocationFilled, availableCash);
+    if (filled < allocationFilled - epsilon) {
       cashLimits += 1;
     }
     if (filled <= epsilon) {
@@ -574,6 +617,15 @@ function executeRebalance({
   const slippageAmount =
     (normalizedPortfolioValue * tradedWeight * execution.slippageBps) / 10_000;
   const warnings: string[] = [];
+  if (missingQuotes > 0) {
+    warnings.push(`${tradeDate} 有 ${missingQuotes} 笔交易缺少有效成交行情，未成交。`);
+  }
+  if (positionLimits > 0) {
+    warnings.push(`${tradeDate} 有 ${positionLimits} 笔买入因实际持仓数量已达上限，未成交。`);
+  }
+  if (allocationLimits > 0) {
+    warnings.push(`${tradeDate} 有 ${allocationLimits} 笔买入受策略持仓比例上限限制，仅部分成交或未成交。`);
+  }
 
   if (priceLimitBlocks > 0) {
     warnings.push(`${tradeDate} 有 ${priceLimitBlocks} 笔交易触发涨跌停约束，未成交。`);
@@ -595,7 +647,7 @@ function executeRebalance({
       requestedTradedWeight <= epsilon
         ? 1
         : Math.min(1, tradedWeight / requestedTradedWeight),
-    constraintCount: priceLimitBlocks + volumeLimits + cashLimits,
+    constraintCount: priceLimitBlocks + volumeLimits + cashLimits + missingQuotes + positionLimits + allocationLimits,
     warnings
   };
 }
@@ -817,7 +869,7 @@ function warmupLength(config: BaseStrategyConfig): number {
     .map((filter) => filter.params?.window)
     .filter((value): value is number => typeof value === "number");
 
-  return Math.max(30, ...factorWindows, ...filterWindows) + 2;
+  return Math.max(30, ...(config.rotationRules?.enabled ? [config.rotationRules.window] : factorWindows), ...filterWindows) + 2;
 }
 
 function resolveBacktestRange(allDates: string[], config: BaseStrategyConfig): BacktestRange {
@@ -890,6 +942,10 @@ function emptyBacktestResult(warnings: string[]): BacktestResult {
 }
 
 function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig }): BacktestResult {
+  if (input.config.rotationRules?.enabled) {
+    const error = rotationRulesError(input.config.rotationRules);
+    if (error) return emptyBacktestResult([`策略规则无效：${error}`]);
+  }
   const barsBySymbol = groupBarsBySymbol(input.bars);
   const closeLookup = createCloseLookup(input.bars);
   const marketLookup = createMarketLookup(input.bars);
@@ -901,6 +957,10 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   }
 
   const execution = defaultExecution(input.config);
+  const maximumInvestedWeight = Math.min(
+    1 - Math.min(1, Math.max(0, input.config.risk.minCashWeight ?? 0)),
+    Math.max(0, input.config.portfolio.investedWeight ?? 1)
+  );
   const dynamicUniverse = isDynamicUniverse(input.config.universeSelection);
   const requestedBenchmark = input.config.benchmarkSymbol ?? defaultBenchmarkSymbol;
   const useDynamicBenchmark =
@@ -998,6 +1058,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
         );
         warnings.push(...overnight.warnings);
         equity *= 1 + overnight.dailyReturn;
+        holdings = overnight.holdings;
 
         const trade = executeRebalance({
           previous: holdings,
@@ -1007,7 +1068,10 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
           tradeDate: date,
           portfolioValue: execution.initialCapital * equity,
           transactionCostBps: input.config.transactionCostBps,
-          execution
+          execution,
+          maximumPositions: Math.max(0, Math.floor(input.config.portfolio.topN)),
+          maximumInvestedWeight,
+          replacementSymbol: input.config.risk.cashReplacementSymbol
         });
         warnings.push(...trade.warnings);
         equity *= 1 - trade.costRate;
@@ -1042,6 +1106,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
         );
         warnings.push(...intraday.warnings);
         equity *= 1 + intraday.dailyReturn;
+        holdings = intraday.holdings;
       } else {
         const dailyResult = portfolioPeriodReturn(
           marketLookup,
@@ -1054,6 +1119,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
         );
         warnings.push(...dailyResult.warnings);
         equity *= 1 + dailyResult.dailyReturn;
+        holdings = dailyResult.holdings;
 
         if (tradesToday && pendingTrade) {
           const trade = executeRebalance({
@@ -1064,7 +1130,10 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
             tradeDate: date,
             portfolioValue: execution.initialCapital * equity,
             transactionCostBps: input.config.transactionCostBps,
-            execution
+            execution,
+            maximumPositions: Math.max(0, Math.floor(input.config.portfolio.topN)),
+            maximumInvestedWeight,
+            replacementSymbol: input.config.risk.cashReplacementSymbol
           });
           warnings.push(...trade.warnings);
           equity *= 1 - trade.costRate;
@@ -1098,7 +1167,8 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       drawdown: drawdownAt(equity, peak)
     });
 
-    if (shouldRebalance(dates, index, input.config.rebalance, holdings.length > 0)) {
+    if (shouldRebalance(dates, index, input.config.rebalance,
+      input.config.rotationRules?.enabled ? index !== startIndex : holdings.length > 0, startIndex)) {
       const selectedUniverse = universeAt(date);
       const evaluation = evaluateUniverse({
         barsBySymbol,
@@ -1108,7 +1178,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       });
       warnings.push(...evaluation.warnings);
 
-      const nextHoldings = holdingsFromRows(evaluation.rows, input.config, input.profiles);
+      const nextHoldings = holdingsFromRows(evaluation.rows, input.config, input.profiles, holdings);
       const tradeDate = dates[index + 1];
       if (tradeDate) {
         pendingRebalance = {
@@ -1135,8 +1205,13 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
   warnings.push(...latestEvaluation.warnings);
 
   const latestRebalance = rebalances.at(-1);
-  const latestHoldings =
-    latestEvaluation.rows.length > 0
+  const latestIsRebalance = shouldRebalance(dates, dates.length - 1, input.config.rebalance,
+    dates.length - 1 !== startIndex, startIndex);
+  const latestHoldings = input.config.rotationRules?.enabled
+    ? latestIsRebalance
+      ? holdingsFromRows(latestEvaluation.rows, input.config, input.profiles, holdings)
+      : holdings
+    : latestEvaluation.rows.length > 0
       ? holdingsFromRows(latestEvaluation.rows, input.config, input.profiles)
       : latestRebalance?.holdings ?? holdings;
   const benchmark = useDynamicBenchmark
@@ -1160,7 +1235,7 @@ function runBaseBacktest(input: RunBacktestInput & { config: BaseStrategyConfig 
       date: latestDate,
       holdings: latestHoldings,
       rankings: latestEvaluation.rows,
-      nextRebalanceHint: `${nextRebalanceHint(input.config.rebalance)}；信号收盘后生成，下一交易日${execution.price === "next_close" ? "收盘" : "开盘"}成交`,
+      nextRebalanceHint: `${input.config.rotationRules?.enabled && !latestIsRebalance ? "今日非轮动日，保持实际持仓；" : ""}${nextRebalanceHint(input.config.rebalance)}；信号收盘后生成，下一交易日${execution.price === "next_close" ? "收盘" : "开盘"}成交`,
       universe: latestUniverse.record
     },
     universeHistory,
