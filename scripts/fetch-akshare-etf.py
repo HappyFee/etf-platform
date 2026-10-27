@@ -14,11 +14,14 @@ import json
 import math
 import re
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as day_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+CHINA_TIMEZONE = timezone(timedelta(hours=8))
 
 
 DEFAULT_SYMBOLS = [
@@ -103,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--discover-limit", type=int, default=60)
     parser.add_argument("--start", default="20210101")
-    parser.add_argument("--end", default=date.today().strftime("%Y%m%d"))
+    parser.add_argument("--end", help="Last requested date, YYYYMMDD; defaults to the latest completed session.")
     parser.add_argument("--adjust", default="qfq", choices=["", "qfq", "hfq"])
     parser.add_argument(
         "--full-refresh",
@@ -116,6 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol-sleep", type=float, default=1.5)
     parser.add_argument("--metadata-sleep", type=float, default=0.2)
     parser.add_argument("--min-success-ratio", type=float, default=0.8)
+    parser.add_argument("--report", help="Write refresh diagnostics to this JSON path, including on failure.")
     parser.add_argument(
         "--output",
         default="public/data/a-share-etf-bars.generated.json",
@@ -126,6 +130,82 @@ def parse_args() -> argparse.Namespace:
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def expected_session_date(end: str | None = None, now: datetime | None = None) -> str:
+    import exchange_calendars as calendars
+
+    current = (now or datetime.now(CHINA_TIMEZONE)).astimezone(CHINA_TIMEZONE)
+    completed = current.date()
+    if current.time() < day_time(18):
+        completed -= timedelta(days=1)
+    requested = min(date.fromisoformat(f"{end[:4]}-{end[4:6]}-{end[6:8]}"), completed) if end else completed
+    calendar = calendars.get_calendar("XSHG")
+    return calendar.date_to_session(requested.isoformat(), direction="previous").strftime("%Y-%m-%d")
+
+
+def next_session_date(session: str) -> str:
+    import exchange_calendars as calendars
+
+    return calendars.get_calendar("XSHG").next_session(session).strftime("%Y-%m-%d")
+
+
+def atomic_write_json(output: Path, payload: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output.parent,
+                                         prefix=f".{output.name}.", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        temporary.replace(output)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
+
+
+def resolve_mother_pool(args: argparse.Namespace, existing: dict[str, Any]) -> tuple[list[str], list[DiscoveredEtf], str]:
+    pinned = args.symbols if args.symbols is not None else DEFAULT_SYMBOLS
+    if not args.discover:
+        return unique_symbols(pinned), [], "fixed"
+    last_error: Exception | None = None
+    for attempt in range(max(1, args.retries + 1)):
+        try:
+            discovered = discover_etfs()
+            symbols = select_discovered_symbols(discovered, args.discover_limit, pinned,
+                                                 existing.get("requestedSymbols", []) or [])
+            return symbols, discovered, "live"
+        except Exception as exc:
+            last_error = exc
+            log(f"ETF discovery attempt {attempt + 1} failed: {exc}")
+            if attempt < args.retries:
+                time.sleep(max(0, args.retry_sleep) * (attempt + 1))
+    cached = unique_symbols(existing.get("requestedSymbols", []) or [])
+    available = {item.get("symbol") for item in existing.get("profiles", []) if isinstance(item, dict)}
+    cached = [symbol for symbol in cached if ETF_CODE_PATTERN.fullmatch(symbol) and symbol in available]
+    if not cached:
+        raise RuntimeError(f"ETF discovery failed and no valid cached mother pool exists: {last_error}")
+    log(f"::warning::ETF discovery unavailable; refreshing the last valid mother pool ({len(cached)} symbols): {last_error}")
+    return unique_symbols([*cached, *pinned]), [], "cached"
+
+
+def validate_fetched_bars(bars: list[MarketBar], symbol: str, start: str, end: str) -> list[MarketBar]:
+    start_iso = date.fromisoformat(f"{start[:4]}-{start[4:6]}-{start[6:8]}").isoformat()
+    end_iso = date.fromisoformat(f"{end[:4]}-{end[4:6]}-{end[6:8]}").isoformat()
+    selected: dict[str, MarketBar] = {}
+    for bar in bars:
+        if bar.symbol != symbol or not start_iso <= bar.date <= end_iso:
+            continue
+        date.fromisoformat(bar.date)
+        if not all(math.isfinite(value) and value > 0 for value in [bar.open, bar.high, bar.low, bar.close]):
+            raise ValueError(f"{symbol} invalid prices on {bar.date}")
+        if not all(math.isfinite(value) and value >= 0 for value in [bar.volume, bar.amount]) or bar.high < bar.low:
+            raise ValueError(f"{symbol} invalid liquidity or price range on {bar.date}")
+        selected[bar.date] = bar
+    result = sorted(selected.values(), key=lambda bar: bar.date)
+    if not result or result[-1].date < end_iso:
+        raise ValueError(f"{symbol} stale or empty response: latest={result[-1].date if result else None}, expected={end_iso}")
+    return result
 
 
 def unique_symbols(symbols: Iterable[str]) -> list[str]:
@@ -160,7 +240,7 @@ def discover_etfs() -> list[DiscoveredEtf]:
     try:
         import akshare as ak  # type: ignore
     except ImportError as exc:
-        raise SystemExit("akshare is required: pip install akshare pandas") from exc
+        raise RuntimeError("akshare is required: pip install akshare pandas") from exc
 
     frame = ak.fund_etf_spot_em()
     required_columns = ["代码", "名称", "成交额"]
@@ -279,7 +359,7 @@ def fetch_profile_metadata(symbol: str, fallback_name: str, discovered_at: str) 
     try:
         import akshare as ak  # type: ignore
     except ImportError as exc:
-        raise SystemExit("akshare is required: pip install akshare pandas") from exc
+        raise RuntimeError("akshare is required: pip install akshare pandas") from exc
 
     frame = ak.fund_overview_em(symbol=symbol)
     if frame.empty:
@@ -377,7 +457,7 @@ def fetch_symbol(symbol: str, start: str, end: str, adjust: str) -> list[MarketB
     try:
         import akshare as ak  # type: ignore
     except ImportError as exc:
-        raise SystemExit("akshare is required: pip install akshare pandas") from exc
+        raise RuntimeError("akshare is required: pip install akshare pandas") from exc
 
     frame = ak.fund_etf_hist_em(
         symbol=symbol,
@@ -484,7 +564,9 @@ def fetch_symbol_from_eastmoney(symbol: str, start: str, end: str, adjust: str) 
     return sorted(bars, key=lambda item: item.date)
 
 
-def fetch_symbol_from_sina(symbol: str, start: str, end: str) -> list[MarketBar]:
+def fetch_symbol_from_sina(symbol: str, start: str, end: str, adjust: str = "") -> list[MarketBar]:
+    if adjust:
+        raise ValueError("Sina raw prices cannot replace adjusted history")
     try:
         import akshare as ak  # type: ignore
     except ImportError as exc:
@@ -538,7 +620,7 @@ def value_at(values: list[object], index: int, default: object = None) -> object
     return values[index]
 
 
-def fetch_symbol_from_yahoo(symbol: str, start: str, end: str) -> list[MarketBar]:
+def fetch_symbol_from_yahoo(symbol: str, start: str, end: str, adjust: str = "") -> list[MarketBar]:
     try:
         from curl_cffi import requests  # type: ignore
     except ImportError as exc:
@@ -561,10 +643,27 @@ def fetch_symbol_from_yahoo(symbol: str, start: str, end: str) -> list[MarketBar
     if not result:
         raise ValueError(f"{symbol} Yahoo returned no result")
 
+    return parse_yahoo_chart(symbol, result, adjust)
+
+
+def parse_yahoo_chart(symbol: str, result: dict[str, Any], adjust: str) -> list[MarketBar]:
+    if adjust == "hfq":
+        raise ValueError("Yahoo cannot provide a consistent inception-based backward adjustment")
+
     timestamps = result.get("timestamp") or []
     quote = ((result.get("indicators") or {}).get("quote") or [None])[0]
     if not timestamps or not quote:
         raise ValueError(f"{symbol} Yahoo returned no daily quote")
+    adjusted = (((result.get("indicators") or {}).get("adjclose") or [{}])[0]).get("adjclose") or []
+    adjustment_anchor = 1.0
+    if adjust == "qfq":
+        anchors = [float(adjusted[index]) / float(close) for index, close in enumerate(quote.get("close") or [])
+                   if close and index < len(adjusted) and adjusted[index] and
+                   math.isfinite(float(close)) and math.isfinite(float(adjusted[index])) and
+                   float(close) > 0 and float(adjusted[index]) > 0]
+        if not anchors:
+            raise ValueError(f"{symbol} Yahoo response has no adjusted closes")
+        adjustment_anchor = anchors[-1]
 
     bars: list[MarketBar] = []
     for index, timestamp in enumerate(timestamps):
@@ -575,14 +674,20 @@ def fetch_symbol_from_yahoo(symbol: str, start: str, end: str) -> list[MarketBar
         volume = value_at(quote.get("volume") or [], index, 0) or 0
         if open_price is None or high is None or low is None or close is None:
             continue
+        factor = 1.0
+        if adjust == "qfq":
+            adjusted_close = value_at(adjusted, index)
+            if adjusted_close is None or float(close) <= 0 or finite_number(adjusted_close) <= 0:
+                raise ValueError(f"{symbol} Yahoo response has incomplete adjustment data")
+            factor = float(adjusted_close) / float(close) / adjustment_anchor
         bars.append(
             MarketBar(
                 symbol=symbol,
                 date=datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat(),
-                open=float(open_price),
-                high=float(high),
-                low=float(low),
-                close=float(close),
+                open=float(open_price) * factor,
+                high=float(high) * factor,
+                low=float(low) * factor,
+                close=float(close) * factor,
                 volume=int(volume),
                 amount=int(float(volume) * float(close)),
             )
@@ -598,58 +703,33 @@ def fetch_symbol_with_retry(
     adjust: str,
     retries: int,
     retry_sleep: float,
+    minimum_start: str | None = None,
+    providers_used: dict[str, str] | None = None,
 ) -> list[MarketBar]:
     attempts = max(1, retries + 1)
     last_error: Exception | None = None
 
+    providers = [
+        ("akshare-eastmoney", lambda: fetch_symbol(symbol, start, end, adjust)),
+        ("eastmoney", lambda: fetch_symbol_from_eastmoney(symbol, start, end, adjust)),
+        ("sina", lambda: fetch_symbol_from_sina(symbol, start, end, adjust)),
+        ("yahoo", lambda: fetch_symbol_from_yahoo(symbol, start, end, adjust)),
+    ]
     for attempt in range(1, attempts + 1):
-        try:
-            bars = fetch_symbol(symbol, start, end, adjust)
-            if not bars:
-                raise ValueError(f"{symbol} returned no bars")
-            log(f"{symbol}: fetched {len(bars)} bars through {bars[-1].date}")
-            return bars
-        except Exception as exc:  # noqa: BLE001 - CLI should report all provider failures.
-            last_error = exc
-            log(f"{symbol}: akshare attempt {attempt}/{attempts} failed: {exc}")
+        for provider, fetcher in providers:
             try:
-                bars = fetch_symbol_from_eastmoney(symbol, start, end, adjust)
-                if not bars:
-                    raise ValueError(f"{symbol} EastMoney fallback returned no bars")
-                log(f"{symbol}: EastMoney fallback fetched {len(bars)} bars through {bars[-1].date}")
+                bars = validate_fetched_bars(fetcher(), symbol, start, end)
+                if minimum_start and bars[0].date > minimum_start:
+                    raise ValueError(f"incomplete history: starts {bars[0].date}, need {minimum_start}")
+                if providers_used is not None:
+                    providers_used[symbol] = provider
+                log(f"{symbol}: {provider} fetched {len(bars)} bars through {bars[-1].date}")
                 return bars
-            except Exception as fallback_exc:  # noqa: BLE001 - include fallback diagnostics.
-                last_error = fallback_exc
-                log(
-                    f"{symbol}: EastMoney fallback attempt {attempt}/{attempts} failed: "
-                    f"{fallback_exc}"
-                )
-            try:
-                bars = fetch_symbol_from_sina(symbol, start, end)
-                if not bars:
-                    raise ValueError(f"{symbol} Sina fallback returned no bars")
-                log(f"{symbol}: Sina fallback fetched {len(bars)} bars through {bars[-1].date}")
-                return bars
-            except Exception as sina_exc:  # noqa: BLE001 - include fallback diagnostics.
-                last_error = sina_exc
-                log(
-                    f"{symbol}: Sina fallback attempt {attempt}/{attempts} failed: "
-                    f"{sina_exc}"
-                )
-            try:
-                bars = fetch_symbol_from_yahoo(symbol, start, end)
-                if not bars:
-                    raise ValueError(f"{symbol} Yahoo fallback returned no bars")
-                log(f"{symbol}: Yahoo fallback fetched {len(bars)} bars through {bars[-1].date}")
-                return bars
-            except Exception as yahoo_exc:  # noqa: BLE001 - include fallback diagnostics.
-                last_error = yahoo_exc
-                log(
-                    f"{symbol}: Yahoo fallback attempt {attempt}/{attempts} failed: "
-                    f"{yahoo_exc}"
-                )
-            if attempt < attempts:
-                time.sleep(retry_sleep)
+            except Exception as exc:
+                last_error = exc
+                log(f"{symbol}: {provider} attempt {attempt}/{attempts} failed: {exc}")
+        if attempt < attempts:
+            time.sleep(max(0, retry_sleep) * attempt)
 
     raise ValueError(f"{symbol} failed after {attempts} attempts: {last_error}")
 
@@ -734,10 +814,19 @@ def profile_payload(profile: EtfProfile) -> dict[str, Any]:
     return {key: value for key, value in asdict(profile).items() if value is not None}
 
 
-def main() -> None:
-    args = parse_args()
+def run_refresh(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    if not 0 < args.min_success_ratio <= 1:
+        raise ValueError("min-success-ratio must be between 0 (exclusive) and 1")
+    expected_date = expected_session_date(args.end)
+    next_trading_date = next_session_date(expected_date)
+    fetch_end = expected_date.replace("-", "")
+    full_refresh = args.full_refresh or bool(args.adjust)
+    report["expectedLatestDate"] = expected_date
+    report["nextTradingDate"] = next_trading_date
     output = Path(args.output)
     existing_payload = load_existing_payload(output)
+    if existing_payload.get("priceAdjustment") != args.adjust:
+        full_refresh = True
     existing_bars = [
         bar
         for item in existing_payload.get("bars", []) or []
@@ -754,27 +843,15 @@ def main() -> None:
     ]
     existing_profile_by_symbol = {profile.symbol: profile for profile in existing_profiles}
 
-    discovered = discover_etfs() if args.discover else []
+    requested_symbols, discovered, discovery_mode = resolve_mother_pool(args, existing_payload)
+    report["discoveryMode"] = discovery_mode
+    report["requestedSymbols"] = requested_symbols
     discovered_by_symbol = {item.symbol: item for item in discovered}
-    explicit_symbols = args.symbols if args.symbols is not None else DEFAULT_SYMBOLS
-    if args.discover:
-        requested_symbols = select_discovered_symbols(
-            discovered,
-            args.discover_limit,
-            explicit_symbols,
-            existing_payload.get("requestedSymbols", []) or [],
-        )
-        log(
-            f"discovered {len(discovered)} supported ETFs; selected "
-            f"{len(requested_symbols)} for the mother pool"
-        )
-    else:
-        requested_symbols = unique_symbols(explicit_symbols)
 
     if not requested_symbols:
-        raise SystemExit("ETF data refresh failed: no symbols requested")
+        raise RuntimeError("ETF data refresh failed: no symbols requested")
 
-    discovered_at = date.today().isoformat()
+    discovered_at = datetime.now(CHINA_TIMEZONE).date().isoformat()
     current_profiles = build_profiles(
         requested_symbols,
         discovered_by_symbol,
@@ -789,11 +866,12 @@ def main() -> None:
 
     refreshed_symbols: list[str] = []
     failed_symbols: dict[str, str] = {}
+    providers_used: dict[str, str] = {}
 
     for symbol in requested_symbols:
         fetch_start = (
             args.start
-            if args.full_refresh
+            if full_refresh
             else incremental_start(
                 symbol,
                 existing_bars_by_symbol,
@@ -802,15 +880,23 @@ def main() -> None:
             )
         )
         try:
+            previous_history = existing_bars_by_symbol.get(symbol) or []
+            minimum_start = max(
+                min(bar.date for bar in previous_history),
+                f"{args.start[:4]}-{args.start[4:6]}-{args.start[6:8]}",
+            ) if full_refresh and previous_history else None
             symbol_bars = fetch_symbol_with_retry(
                 symbol,
                 fetch_start,
-                args.end,
+                fetch_end,
                 args.adjust,
                 args.retries,
                 args.retry_sleep,
+                minimum_start=minimum_start,
+                providers_used=providers_used,
             )
-            if args.full_refresh:
+            symbol_bars = validate_fetched_bars(symbol_bars, symbol, fetch_start, fetch_end)
+            if full_refresh:
                 merged_bars = {
                     key: bar
                     for key, bar in merged_bars.items()
@@ -825,26 +911,27 @@ def main() -> None:
             time.sleep(max(0, args.symbol_sleep))
 
     success_ratio = len(refreshed_symbols) / max(1, len(requested_symbols))
+    report.update({
+        "freshSymbols": refreshed_symbols,
+        "failedSymbols": failed_symbols,
+        "providers": providers_used,
+        "freshRatio": success_ratio,
+    })
     if not merged_bars or success_ratio < args.min_success_ratio:
-        raise SystemExit(
+        raise RuntimeError(
             "ETF data refresh failed: "
-            f"{len(refreshed_symbols)}/{len(requested_symbols)} symbols refreshed; "
+            f"only {len(refreshed_symbols)}/{len(requested_symbols)} symbols current through {expected_date}; "
             f"failed={failed_symbols}"
         )
 
     bars = sorted(merged_bars.values(), key=lambda item: (item.symbol, item.date))
-    available_symbols = {bar.symbol for bar in bars}
-    succeeded_symbols = [
-        symbol for symbol in requested_symbols if symbol in available_symbols
-    ]
+    succeeded_symbols = refreshed_symbols
     latest_date = max(bar.date for bar in bars)
     earliest_date = min(bar.date for bar in bars)
-    current_latest_date = max(
-        bar.date for bar in bars if bar.symbol in set(succeeded_symbols)
-    )
+    # A current observation must never be recorded as if it were known in the past.
     universe_snapshots = update_membership_snapshots(
         membership_snapshots_from_payload(existing_payload.get("universeSnapshots")),
-        current_latest_date,
+        discovered_at,
         requested_symbols,
     )
 
@@ -866,21 +953,40 @@ def main() -> None:
         "requestedSymbols": requested_symbols,
         "succeededSymbols": succeeded_symbols,
         "failedSymbols": failed_symbols,
+        "expectedLatestDate": expected_date,
+        "nextTradingDate": next_trading_date,
+        "discoveryMode": discovery_mode,
+        "freshRatio": success_ratio,
+        "providers": providers_used,
+        "priceAdjustment": args.adjust,
+        "estimatedAmountSymbols": [symbol for symbol, provider in providers_used.items() if provider == "yahoo"],
         "universeSnapshots": universe_snapshots,
         "profiles": [profile_payload(profile) for profile in profiles],
         "bars": [asdict(bar) for bar in bars],
     }
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    atomic_write_json(output, payload)
+    report.update({"status": "success", "latestDate": latest_date, "bars": len(bars)})
     print(
         f"wrote {len(bars)} bars for {len(succeeded_symbols)}/{len(requested_symbols)} "
         f"current symbols with {len(universe_snapshots)} membership snapshots "
         f"through {latest_date} to {output}"
     )
+
+
+def main() -> None:
+    args = parse_args()
+    report: dict[str, Any] = {"status": "running", "startedAt": datetime.now(timezone.utc).isoformat()}
+    try:
+        run_refresh(args, report)
+    except Exception as exc:
+        report.update({"status": "failure", "error": str(exc)})
+        log(f"::error::ETF data refresh failed; previous data preserved: {exc}")
+        raise SystemExit(1) from exc
+    finally:
+        report["finishedAt"] = datetime.now(timezone.utc).isoformat()
+        if args.report:
+            atomic_write_json(Path(args.report), report)
 
 
 if __name__ == "__main__":

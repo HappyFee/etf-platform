@@ -116,11 +116,17 @@ public/data/a-share-etf-bars.generated.json
 获取真实 ETF 日线数据：
 
 ```bash
-python -m pip install akshare pandas curl_cffi
+python -m pip install -r scripts/requirements-data.txt
 python scripts/fetch-akshare-etf.py --discover --discover-limit 60 --full-refresh
 ```
 
 `--discover` 会从 AkShare 当前 ETF 行情发现流动性靠前的广谱母池，保留默认标的和仍处于流动性缓冲区的上期成员。每次母池变化都会写入 `universeSnapshots`，供回测按当时可用名单选池。仓库内置的 GitHub Actions 工作流会在交易日使用 `--full-refresh` 重拉当前母池，避免前复权基准变化造成新旧历史不一致；单只标的刷新失败时仍保留上一版历史数据。
+
+定时任务在工作日北京时间 18:37 和 20:37 各执行一次，GitHub 调度可能延迟。发现接口不可用时改用上次有效母池继续刷新。至少 80% 的请求标的更新到 XSHG 日历判定的最近完整交易日才允许写入；周末和节假日不误报。过期响应、历史截断会被拒绝，失败时保留原文件。备用行情源必须支持指定复权口径，不会静默混入未复权价格。
+
+使用 `--report refresh-report.json` 可保存诊断。定时任务无论成功失败都会生成摘要，并将报告保存到 `etf-refresh-diagnostics` 构件。请在 GitHub 通知设置中开启 Actions 失败通知，在 **Actions > Refresh ETF data** 查看失败详情。页面在下个交易日 21:00 后仍未更新时提示过期；没有交易日元数据的旧文件仍使用七天兜底提示。后续交易所公布新年度休市安排后，应更新固定版本的交易日历依赖。
+
+Windows 本地刷新若遇到文件替换 `WinError 5`，请先停止占用行情文件的 Vite 进程，刷新后再启动。写入失败不会损坏原文件。
 
 首次启用动态发现时只能从当前日期开始积累真实成员快照。更早的区间会按数据文件中可见的标的重建，并在回测中明确提示可能存在幸存者偏差。
 

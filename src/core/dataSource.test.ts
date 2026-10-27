@@ -18,6 +18,7 @@ describe("market data source", () => {
           source: "unit-test",
           generatedAt: "2026-05-28T00:00:00Z",
           latestDate: "2026-05-29",
+          nextTradingDate: "2026-06-01",
           requestedSymbols: ["510300", "159915"],
           succeededSymbols: ["510300"],
           failedSymbols: { "159915": "provider timeout" },
@@ -32,6 +33,7 @@ describe("market data source", () => {
 
     expect(dataset?.source).toBe("unit-test");
     expect(dataset?.latestDate).toBe("2026-05-29");
+    expect(dataset?.nextTradingDate).toBe("2026-06-01");
     expect(dataset?.succeededSymbols).toEqual(["510300", "511880"]);
     expect(dataset?.failedSymbols).toEqual({ "159915": "provider timeout" });
     expect(dataset?.universeSnapshots).toEqual([

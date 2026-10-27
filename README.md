@@ -116,11 +116,17 @@ If that file is missing or invalid, the app falls back to the bundled demo datas
 To fetch real ETF daily bars:
 
 ```bash
-python -m pip install akshare pandas curl_cffi
+python -m pip install -r scripts/requirements-data.txt
 python scripts/fetch-akshare-etf.py --discover --discover-limit 60 --full-refresh
 ```
 
 `--discover` builds a broad mother pool from the current AkShare ETF market snapshot. It keeps the default symbols and prior members that remain inside a liquidity buffer, then records every membership change in `universeSnapshots`. Backtests select from the membership known at each date. The included GitHub Actions workflow uses `--full-refresh` on trading days so forward-adjusted prices cannot mix adjustment bases; a failed symbol keeps its previous history.
+
+The refresh runs twice on weekdays (18:37 and 20:37 Asia/Shanghai; GitHub may delay scheduled jobs). If discovery is unavailable, it refreshes the last valid mother pool instead. Publication requires at least 80% of requested symbols to reach the latest completed XSHG trading session, allowing for weekends and holidays. Stale or truncated responses are rejected and failed runs leave the previous data file unchanged. Fallback providers must support the requested price adjustment; raw prices are never silently substituted for adjusted prices.
+
+Use `--report refresh-report.json` for machine-readable diagnostics. Every scheduled run preserves this report as the `etf-refresh-diagnostics` artifact and writes a job summary, including failures. Enable GitHub Actions failure notifications in your GitHub notification settings and inspect failed runs under **Actions > Refresh ETF data**. The app warns after the next trading day's 21:00 update deadline; older data files without calendar metadata retain the seven-day fallback warning. Update the pinned trading-calendar dependency when future exchange holiday schedules become available.
+
+On Windows, stop local Vite servers before refreshing if file replacement reports `WinError 5`; the failed write preserves the previous file. Restart the server after the refresh.
 
 Real membership history starts accumulating on the first discovery run. Earlier periods are reconstructed from symbols visible in the data file and produce an explicit survivorship-bias warning.
 

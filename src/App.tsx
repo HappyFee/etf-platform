@@ -145,17 +145,24 @@ function initialWorkspace(storage: StorageLike | null, account: AccountProfile) 
 export function DataSourceNotice({
   generatedUrl,
   loadStatus,
-  latestDate
+  latestDate,
+  nextTradingDate,
+  failedSymbolCount = 0
 }: {
   generatedUrl: string;
   loadStatus: DataLoadStatus;
   latestDate?: string;
+  nextTradingDate?: string;
+  failedSymbolCount?: number;
 }) {
   const ageDays = latestDate
     ? (Date.now() - Date.parse(`${latestDate}T00:00:00+08:00`)) / 86_400_000
     : 0;
-  const stale = loadStatus === "loaded" && ageDays >= 7;
-  if (loadStatus !== "failed" && !stale) {
+  const refreshDeadline = nextTradingDate ? Date.parse(`${nextTradingDate}T21:00:00+08:00`) : NaN;
+  const stale = loadStatus === "loaded" && (Number.isFinite(refreshDeadline)
+    ? Date.now() >= refreshDeadline : ageDays >= 7);
+  const partialFailure = loadStatus === "loaded" && failedSymbolCount > 0;
+  if (loadStatus !== "failed" && !stale && !partialFailure) {
     return null;
   }
 
@@ -163,8 +170,12 @@ export function DataSourceNotice({
     <div className="data-source-notice" data-testid="data-source-notice" role="status">
       <AlertTriangle size={16} />
       <span>
-        {stale ? `行情截至 ${latestDate}，已超过 7 天未更新。当前回测和信号使用的是历史行情。`
-          : "真实行情数据加载失败，当前使用演示数据。"}
+        {stale ? Number.isFinite(refreshDeadline)
+          ? `行情截至 ${latestDate}，${nextTradingDate} 交易日的行情尚未更新。请勿将旧信号当作最新信号。`
+          : `行情截至 ${latestDate}，已超过 7 天未更新。当前回测和信号使用的是历史行情。`
+          : partialFailure
+            ? `最新行情截至 ${latestDate}，但有 ${failedSymbolCount} 只 ETF 未更新，仍保留旧历史。请核对相关标的日期。`
+            : "真实行情数据加载失败，当前使用演示数据。"}
       </span>
       {loadStatus === "failed" && <a href={generatedUrl} target="_blank" rel="noreferrer">查看行情文件</a>}
     </div>
@@ -861,7 +872,8 @@ export function App() {
         </div>
       </header>
 
-      <DataSourceNotice generatedUrl={generatedUrl} loadStatus={dataLoadStatus} latestDate={dataLatestDate} />
+      <DataSourceNotice generatedUrl={generatedUrl} loadStatus={dataLoadStatus} latestDate={dataLatestDate}
+        nextTradingDate={dataset.nextTradingDate} failedSymbolCount={Object.keys(dataset.failedSymbols ?? {}).length} />
       {accountNotice && (
         <div className="data-source-notice" role="status">
           <AlertTriangle size={16} />

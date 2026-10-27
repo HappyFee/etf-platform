@@ -1,5 +1,5 @@
 import { renderToString } from "react-dom/server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { AccountPanel, App, DataSourceNotice } from "./App";
 import { StrategyLab } from "./components/StrategyLab";
 import { SignalPanel } from "./components/SignalPanel";
@@ -8,6 +8,27 @@ import { defaultStrategies, defaultStrategy } from "./core/defaultStrategy";
 import { etfProfiles, marketBars } from "./core/sampleData";
 
 describe("App", () => {
+  test("warns when some symbols failed even though the overall date is current", () => {
+    const html = renderToString(<DataSourceNotice generatedUrl="/data/bars.json" loadStatus="loaded"
+      latestDate="2099-10-27" nextTradingDate="2099-10-28" failedSymbolCount={2} />);
+    expect(html).toContain("2 只 ETF 未更新");
+    expect(html).toContain("仍保留旧历史");
+  });
+  test("uses the next trading session deadline to warn early without holiday false alarms", () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(Date.parse("2026-10-05T22:00:00+08:00"));
+      expect(renderToString(<DataSourceNotice generatedUrl="/data/bars.json" loadStatus="loaded"
+        latestDate="2026-09-30" nextTradingDate="2026-10-08" />)).toBe("");
+      now.mockReturnValue(Date.parse("2026-10-27T22:00:00+08:00"));
+      const html = renderToString(<DataSourceNotice generatedUrl="/data/bars.json" loadStatus="loaded"
+        latestDate="2026-10-26" nextTradingDate="2026-10-27" />);
+      expect(html).toContain("行情尚未更新");
+      expect(html).toContain("2026-10-27");
+    } finally {
+      now.mockRestore();
+    }
+  });
   test("renders the ETF strategy platform workspace", () => {
     const html = renderToString(<App />);
 

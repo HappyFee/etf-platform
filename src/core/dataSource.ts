@@ -10,6 +10,7 @@ export interface MarketDataset {
   source: string;
   generatedAt: string;
   latestDate?: string;
+  nextTradingDate?: string;
   requestedSymbols?: string[];
   succeededSymbols?: string[];
   failedSymbols?: Record<string, string>;
@@ -22,6 +23,7 @@ interface GeneratedPayload {
   source?: unknown;
   generatedAt?: unknown;
   latestDate?: unknown;
+  nextTradingDate?: unknown;
   requestedSymbols?: unknown;
   succeededSymbols?: unknown;
   failedSymbols?: unknown;
@@ -235,6 +237,7 @@ export async function loadGeneratedDataset(
       generatedAt:
         typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
       latestDate: typeof payload.latestDate === "string" ? payload.latestDate : undefined,
+      nextTradingDate: typeof payload.nextTradingDate === "string" ? payload.nextTradingDate : undefined,
       requestedSymbols: stringArray(payload.requestedSymbols),
       succeededSymbols: supplementedSucceededSymbols,
       failedSymbols: stringRecord(payload.failedSymbols),
